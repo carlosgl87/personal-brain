@@ -1,0 +1,2 @@
+# Transcripción remota con OpenRouter: HTTPX ya está incluido.
+-r requirements.txt

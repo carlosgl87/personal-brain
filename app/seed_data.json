@@ -1,0 +1,355 @@
+{
+  "areas": [
+    "Laureate",
+    "Consultora"
+  ],
+  "categories": [
+    "Commercial Ecosystem",
+    "Student Ecosystem",
+    "Productivity Ecosystem",
+    "Administrativo"
+  ],
+  "companies": [
+    "Estrategia",
+    "Catusita",
+    "Primax",
+    "Financiera Oh"
+  ],
+  "projects": [
+    {
+      "area": "Laureate",
+      "category": "Commercial Ecosystem",
+      "name": "School Platform",
+      "slug": "school-platform",
+      "aliases": [
+        "Plataforma Colegios",
+        "Plataforma de Colegios"
+      ]
+    },
+    {
+      "area": "Laureate",
+      "category": "Commercial Ecosystem",
+      "name": "AI Prospector",
+      "slug": "ai-prospector",
+      "aliases": [
+        "IA Prospectora",
+        "Prospector"
+      ]
+    },
+    {
+      "area": "Laureate",
+      "category": "Commercial Ecosystem",
+      "name": "Self-Service Admissions Flow",
+      "slug": "self-service-admissions-flow",
+      "aliases": [
+        "Flujo de Admisión",
+        "Admisión Self-Service"
+      ]
+    },
+    {
+      "area": "Laureate",
+      "category": "Commercial Ecosystem",
+      "name": "AI Convalidator",
+      "slug": "ai-convalidator",
+      "aliases": [
+        "IA Convalidadora",
+        "Convalidaciones",
+        "Convalidador"
+      ]
+    },
+    {
+      "area": "Laureate",
+      "category": "Commercial Ecosystem",
+      "name": "E-commerce",
+      "slug": "e-commerce",
+      "aliases": [
+        "Ecommerce",
+        "E commerce"
+      ]
+    },
+    {
+      "area": "Laureate",
+      "category": "Commercial Ecosystem",
+      "name": "Lead Scoring",
+      "slug": "lead-scoring",
+      "aliases": [
+        "Lead Score"
+      ]
+    },
+    {
+      "area": "Laureate",
+      "category": "Commercial Ecosystem",
+      "name": "AI Super Advisor",
+      "slug": "ai-super-advisor",
+      "aliases": [
+        "Asesor de Asesores",
+        "Super Advisor"
+      ]
+    },
+    {
+      "area": "Laureate",
+      "category": "Commercial Ecosystem",
+      "name": "Speech Analytics",
+      "slug": "speech-analytics",
+      "aliases": [
+        "Speech"
+      ]
+    },
+    {
+      "area": "Laureate",
+      "category": "Student Ecosystem",
+      "name": "AI Tutor",
+      "slug": "ai-tutor",
+      "aliases": [
+        "Tutor IA",
+        "Tutor AI"
+      ]
+    },
+    {
+      "area": "Laureate",
+      "category": "Student Ecosystem",
+      "name": "Engagement / Re-enrollment Model",
+      "slug": "engagement-re-enrollment-model",
+      "aliases": [
+        "Engagement Model",
+        "Re-enrollment Model",
+        "Modelo de Reinscripción"
+      ]
+    },
+    {
+      "area": "Laureate",
+      "category": "Student Ecosystem",
+      "name": "Early Dropout / No-show Model",
+      "slug": "early-dropout-no-show-model",
+      "aliases": [
+        "Early Dropout",
+        "No-show Model",
+        "Modelo No Show"
+      ]
+    },
+    {
+      "area": "Laureate",
+      "category": "Student Ecosystem",
+      "name": "AI 360 Service / ALMA",
+      "slug": "ai-360-service-alma",
+      "aliases": [
+        "AI 360 Service",
+        "AI 360",
+        "ALMA",
+        "Alma"
+      ]
+    },
+    {
+      "area": "Laureate",
+      "category": "Student Ecosystem",
+      "name": "Student Administrative Processes / Trámites",
+      "slug": "student-administrative-processes-tramites",
+      "aliases": [
+        "Student Administrative Processes",
+        "Trámites",
+        "Tramites",
+        "Automatización de Trámites",
+        "Automatizacion de Tramites"
+      ]
+    },
+    {
+      "area": "Laureate",
+      "category": "Student Ecosystem",
+      "name": "Personalized Learning Path",
+      "slug": "personalized-learning-path",
+      "aliases": [
+        "AI Personalized Learning",
+        "AI Coach",
+        "Personalized Learning"
+      ]
+    },
+    {
+      "area": "Laureate",
+      "category": "Student Ecosystem",
+      "name": "FrontRunner",
+      "slug": "frontrunner",
+      "aliases": [
+        "Frontrunner",
+        "Front Runner"
+      ]
+    },
+    {
+      "area": "Laureate",
+      "category": "Student Ecosystem",
+      "name": "Fenómeno del Niño",
+      "slug": "fenomeno-del-nino",
+      "aliases": [
+        "Fenomeno del Niño",
+        "Fenomeno del Nino",
+        "FEN"
+      ]
+    },
+    {
+      "area": "Laureate",
+      "category": "Student Ecosystem",
+      "name": "App Cibertec",
+      "slug": "app-cibertec",
+      "aliases": [
+        "Cibertec App",
+        "App CIB"
+      ]
+    },
+    {
+      "area": "Laureate",
+      "category": "Productivity Ecosystem",
+      "name": "AI Assessment & Feedback",
+      "slug": "ai-assessment-feedback",
+      "aliases": [
+        "AI Assessments",
+        "IA Assessments",
+        "AI Assessment"
+      ]
+    },
+    {
+      "area": "Laureate",
+      "category": "Productivity Ecosystem",
+      "name": "AI Class Insights",
+      "slug": "ai-class-insights",
+      "aliases": [
+        "Class Audit Platform",
+        "QA Videos"
+      ]
+    },
+    {
+      "area": "Laureate",
+      "category": "Productivity Ecosystem",
+      "name": "AI-Powered Regulatory & Quality Management",
+      "slug": "ai-powered-regulatory-quality-management",
+      "aliases": [
+        "Regulatory & Quality Management",
+        "Quality Management"
+      ]
+    },
+    {
+      "area": "Laureate",
+      "category": "Productivity Ecosystem",
+      "name": "AI Educational Content Generator",
+      "slug": "ai-educational-content-generator",
+      "aliases": [
+        "Content Generation Platform",
+        "Plataforma de Creación de Contenido"
+      ]
+    },
+    {
+      "area": "Laureate",
+      "category": "Productivity Ecosystem",
+      "name": "Professor Assistant",
+      "slug": "professor-assistant",
+      "aliases": [
+        "Asistente de Profesor",
+        "Asistente de Profesores"
+      ]
+    },
+    {
+      "area": "Laureate",
+      "category": "Productivity Ecosystem",
+      "name": "Lean + AI",
+      "slug": "lean-ai",
+      "aliases": [
+        "Lean AI"
+      ]
+    },
+    {
+      "area": "Laureate",
+      "category": "Administrativo",
+      "name": "GCP Migration & Landing Zone",
+      "slug": "gcp-migration-landing-zone",
+      "aliases": [
+        "GCP Migration",
+        "Landing Zone",
+        "GCP Landing Zone"
+      ]
+    },
+    {
+      "area": "Laureate",
+      "category": "Administrativo",
+      "name": "Google Workspace Migration",
+      "slug": "google-workspace-migration",
+      "aliases": [
+        "Google Workspace",
+        "Workspace Migration",
+        "Workspace"
+      ]
+    },
+    {
+      "area": "Laureate",
+      "category": "Administrativo",
+      "name": "Operating Model / McKinsey",
+      "slug": "operating-model-mckinsey",
+      "aliases": [
+        "Operating Model",
+        "McKinsey",
+        "Modelo Operativo"
+      ]
+    },
+    {
+      "area": "Consultora",
+      "company": "Estrategia",
+      "name": "SIMA",
+      "slug": "sima",
+      "aliases": [
+        "SIMA 3",
+        "SIMA3",
+        "CIMA"
+      ]
+    },
+    {
+      "area": "Consultora",
+      "company": "Catusita",
+      "name": "Dashboard Cobranzas",
+      "slug": "dashboard-cobranzas",
+      "aliases": [
+        "Dashboard de Cobranzas",
+        "Cobranzas Dashboard"
+      ]
+    },
+    {
+      "area": "Consultora",
+      "company": "Catusita",
+      "name": "Catu - Agente Vendedores",
+      "slug": "catu-agente-vendedores",
+      "aliases": [
+        "Catu",
+        "Agente Vendedores",
+        "Agente Catusita",
+        "Catusita Agente Vendedores"
+      ]
+    },
+    {
+      "area": "Consultora",
+      "company": "Catusita",
+      "name": "Optimización de Inventarios",
+      "slug": "optimizacion-de-inventarios",
+      "aliases": [
+        "Optimizacion de Inventarios",
+        "Inventarios"
+      ]
+    },
+    {
+      "area": "Consultora",
+      "company": "Primax",
+      "name": "Loyalty",
+      "slug": "loyalty",
+      "aliases": [
+        "Primax Loyalty",
+        "Loyalty Primax"
+      ]
+    },
+    {
+      "area": "Consultora",
+      "company": "Financiera Oh",
+      "name": "Autogestión Reclamos",
+      "slug": "autogestion-reclamos",
+      "aliases": [
+        "Autogestion Reclamos",
+        "Autogestión de Reclamos",
+        "Reclamos Financiera Oh"
+      ]
+    }
+  ]
+}
