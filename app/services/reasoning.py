@@ -1,6 +1,5 @@
 """Recuperación permitida, acotada y trazable; no interpreta SQL."""
 import hashlib
-import json
 from datetime import datetime, timezone
 from uuid import UUID, uuid4
 
@@ -14,7 +13,7 @@ from app.services.normalization import normalize
 from app.services.queries import Scope, current_derived, resolve_scope, scoped, source_statement, task_statement, decision_statement
 from app.services.reasoning_llm import PLANNER_VERSION, ReasoningError, plan_question, synthesize
 
-MAX_CHUNKS = 8
+from app.services.retrieval_budget import bound_context, diverse_chunks, effective_limits
 
 
 def reasoning_question(text):
@@ -62,6 +61,8 @@ def retrieve(session, plan, settings):
     scope = plan_scope(session, plan)
     if scope.error:
         raise MemoryError(scope.error)
+    limits = effective_limits(plan)
+    global_broad = scope.project_ids is None and plan.retrieval_depth == "broad"
     context = {"scope": scope.label, "tasks": [], "decisions": [], "recent_sources": [],
                "chunks": [], "warnings": [], "projects": []}
     projects = session.scalars(scoped(select(Project), Project.id, scope).order_by(Project.name).limit(51)).all()
@@ -76,34 +77,34 @@ def retrieve(session, plan, settings):
         else:
             statement = task_statement(scope)
         rows = session.execute(date_filter(statement, Task.due_at, plan).order_by(
-            Task.due_at.asc().nulls_last(), Task.id).limit(21)).all()
-        for task, name in rows[:20]:
+            Task.due_at.asc().nulls_last(), Task.id).limit(limits["tasks"] + 1)).all()
+        for task, name in rows[:limits["tasks"]]:
             context["tasks"].append({"task_id": str(task.id), "source_id": str(task.source_id) if task.source_id else None,
                 "run_id": str(task.processing_run_id) if task.processing_run_id else None,
                 "title": task.title, "description": clipped(task.description, 500), "owner": task.owner_text,
                 "status": task.status, "due_at": task.due_at.isoformat() if task.due_at else None,
                 "project": name, "completed_at": task.completed_at.isoformat() if task.completed_at else None})
-        if len(rows) > 20:
-            context["warnings"].append("Solo se recuperaron 20 tareas; hay más.")
+        if len(rows) > limits["tasks"]:
+            context["warnings"].append("El limite de tareas dejo cobertura parcial; hay más.")
     if plan.include_decisions:
         statement = date_filter(decision_statement(scope), Decision.decided_at, plan)
-        rows = session.execute(statement.order_by(Decision.created_at.desc(), Decision.id).limit(21)).all()
-        for decision, name in rows[:20]:
+        rows = session.execute(statement.order_by(Decision.created_at.desc(), Decision.id).limit(limits["decisions"] + 1)).all()
+        for decision, name in rows[:limits["decisions"]]:
             context["decisions"].append({"decision_id": str(decision.id), "source_id": str(decision.source_id) if decision.source_id else None,
                 "run_id": str(decision.processing_run_id) if decision.processing_run_id else None,
                 "text": clipped(decision.decision_text, 1500), "project": name,
                 "decided_at": decision.decided_at.isoformat() if decision.decided_at else None})
-        if len(rows) > 20:
-            context["warnings"].append("Solo se recuperaron 20 decisiones; hay más.")
+        if len(rows) > limits["decisions"]:
+            context["warnings"].append("El limite de decisiones dejo cobertura parcial; hay más.")
     if plan.include_recent_sources:
         statement = date_filter(source_statement(scope), Source.received_at, plan)
-        rows = session.execute(statement.order_by(Source.received_at.desc(), Source.id).limit(plan.recent_sources_limit + 1)).all()
-        for source, run in rows[:plan.recent_sources_limit]:
+        rows = session.execute(statement.order_by(Source.received_at.desc(), Source.id).limit(limits["recent_sources"] + 1)).all()
+        for source, run in rows[:limits["recent_sources"]]:
             context["recent_sources"].append({"source_id": str(source.id), "received_at": source.received_at.isoformat(),
                 "run_id": str(run.id) if run else None, "source_type": source.source_type,
                 "summary": clipped(run.result.get("summary", "") if run else "", 1500),
                 "excerpt": clipped(source.raw_content, 2000)})
-        if len(rows) > plan.recent_sources_limit:
+        if len(rows) > limits["recent_sources"]:
             context["warnings"].append("Las notas recientes están limitadas por el plan.")
     if plan.semantic_queries:
         if not embedding_ready(settings):
@@ -113,23 +114,42 @@ def retrieve(session, plan, settings):
             try:
                 for question in plan.semantic_queries:
                     for item in semantic_search(session, question, settings, project_ids=scope.project_ids,
-                                date_from=plan.date_from, date_to=plan.date_to, limit=MAX_CHUNKS):
+                                date_from=plan.date_from, date_to=plan.date_to,
+                                limit=54 if global_broad else limits["chunks"], diversify=global_broad):
                         previous = found.get(item["chunk_id"])
                         if previous is None or item["distance"] < previous["distance"]:
                             found[item["chunk_id"]] = item
-                context["chunks"] = sorted(found.values(), key=lambda x: (x["distance"], x["chunk_id"]))[:MAX_CHUNKS]
+                ranked = sorted(found.values(), key=lambda x: (x["distance"], x["chunk_id"]))
+                context["chunks"] = (diverse_chunks(ranked, limits["chunks"]) if global_broad
+                                     else ranked[:limits["chunks"]])
+                if len(ranked) > limits["chunks"] or len(context["chunks"]) == limits["chunks"]:
+                    context["warnings"].append("Los chunks son una seleccion limitada de candidatos relevantes.")
+                if global_broad:
+                    context["warnings"].append("Diversidad por proyecto aplicada; limitada a proyectos con chunks indexados relevantes.")
                 if not context["chunks"]:
                     context["warnings"].append("No se encontraron chunks indexados para el alcance y modelo activos.")
             except EmbeddingError:
                 context["warnings"].append("Falló la búsqueda semántica; la respuesta usa únicamente evidencia estructurada y reciente.")
     context["warnings"].append("Recuperación acotada; no implica cobertura completa de toda la historia.")
-    if len(json.dumps(context, ensure_ascii=False)) > 130000:
-        raise MemoryError("El contexto excedió el límite seguro. Acota la pregunta a un proyecto.")
-    return context
+    return bound_context(context, plan, limits, settings.reasoning_context_max_chars)
+
 
 
 def trace_context(context):
-    result = {key: value for key, value in context.items() if key not in {"chunks", "recent_sources"}}
+    result = {key: value for key, value in context.items() if key not in {"chunks", "recent_sources", "tasks", "decisions"}}
+    for kind in ("tasks", "decisions"):
+        result[kind] = []
+        for item in context[kind]:
+            trace = {key: value for key, value in item.items() if key not in {"title", "description", "text"}}
+            for key in ("title", "description", "text"):
+                if key in item:
+                    value = item[key]
+                    text = value.get("text", "") if isinstance(value, dict) else (value or "")
+                    trace[key + "_sha256"] = hashlib.sha256(text.encode()).hexdigest()
+                    trace[key + "_chars"] = len(text)
+                    if isinstance(value, dict):
+                        trace[key + "_truncated"] = value.get("truncated", False)
+            result[kind].append(trace)
     result["chunks"] = [{key: value for key, value in chunk.items() if key != "content"} |
                        {"content_sha256": hashlib.sha256(chunk["content"].encode()).hexdigest()}
                        for chunk in context["chunks"]]
@@ -165,6 +185,8 @@ def answer_reasoning(session, question, question_source_id, settings):
                 answer = synthesize(question, context, settings)
                 if any("semántica" in warning or "embeddings" in warning or "indexados" in warning for warning in context["warnings"]):
                     answer += "\n\nCobertura semántica incompleta; revisa configuración e indexación."
+                if context.get("retrieval", {}).get("budget_reduced"):
+                    answer += "\n\nCobertura parcial: la evidencia se redujo por el presupuesto de contexto."
             session.add(ReasoningRun(id=uuid4(), question_source_id=source.id, provider="anthropic",
                 model=model, planner_version=PLANNER_VERSION, plan=plan.model_dump(mode="json"),
                 retrieved_context=trace_context(context), answer=answer))

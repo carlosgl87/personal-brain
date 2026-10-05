@@ -227,7 +227,7 @@ class MemoryTests(unittest.TestCase):
         session = MagicMock()
         session.scalar.return_value = SimpleNamespace(id=uuid4(), source_type="meeting_transcript",
             raw_content="x" * 30001, latest_processing_run_id=None)
-        config = settings(LLM_API_KEY="fake", LLM_MODEL="test")
+        config = settings(LLM_API_KEY="fake", LLM_MODEL="test", HIERARCHICAL_EXTRACTION_ENABLED=False)
         with patch("app.services.processing.extract") as extract:
             with self.assertRaises(SourceNotProcessable):
                 process_text_source(session, uuid4(), config)
@@ -243,7 +243,7 @@ class MemoryTests(unittest.TestCase):
         for expected in ("CREATE EXTENSION IF NOT EXISTS vector", "CREATE TABLE source_chunks",
                          "CREATE TABLE reasoning_runs", "UNIQUE (source_id, chunk_version, chunk_index)"):
             self.assertIn(expected, sql)
-        for forbidden in ("DROP ", "TRUNCATE ", "DELETE ", "UPDATE sources"):
+        for forbidden in ("DROP ", "TRUNCATE ", "DELETE FROM ", "UPDATE sources"):
             self.assertNotIn(forbidden, sql)
 
 

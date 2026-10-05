@@ -66,7 +66,7 @@ def process_saved_source(client, api_url, token, source_id):
     try:
         response = client.post(
             api_url + "/sources/" + source_id + "/process",
-            headers={"Authorization": "Bearer " + token}, timeout=600,
+            headers={"Authorization": "Bearer " + token}, timeout=3900,
         )
         response.raise_for_status()
         result = response.json()

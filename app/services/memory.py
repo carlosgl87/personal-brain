@@ -1,7 +1,7 @@
 """Indexación por fuente con commits pequeños; búsqueda exacta y provenance."""
 from uuid import uuid4
 
-from sqlalchemy import exists, or_, select
+from sqlalchemy import exists, func, or_, select
 from sqlalchemy.dialects.postgresql import insert
 
 from app.models import Source, SourceChunk
@@ -15,6 +15,21 @@ class MemoryError(RuntimeError):
     pass
 
 
+def ensure_source_chunks(session, source, settings, source_id=None):
+    """Caller controls the transaction; does not require or call embeddings."""
+    version = chunk_version(settings)
+    source_id = source_id if source_id is not None else source.id
+    for chunk in chunk_source(source, settings):
+        session.execute(insert(SourceChunk).values(
+            id=uuid4(), source_id=source_id, chunk_version=version, chunk_index=chunk.index,
+            content=chunk.content, char_start=chunk.start, char_end=chunk.end,
+            chunk_metadata={"algorithm": settings.memory_chunk_version,
+                            "requested_embedding_model": settings.openrouter_embedding_model,
+                            "dimensions": settings.openrouter_embedding_dimensions},
+        ).on_conflict_do_nothing(index_elements=["source_id", "chunk_version", "chunk_index"]))
+    return version
+
+
 def index_source(session, source_id, settings):
     version = chunk_version(settings)
     # Chunks se confirman antes de cualquier llamada pagada.
@@ -22,14 +37,7 @@ def index_source(session, source_id, settings):
         source = session.scalar(select(Source).where(Source.id == source_id).with_for_update())
         if source is None:
             raise MemoryError("Fuente inexistente.")
-        for chunk in chunk_source(source, settings):
-            session.execute(insert(SourceChunk).values(
-                id=uuid4(), source_id=source_id, chunk_version=version, chunk_index=chunk.index,
-                content=chunk.content, char_start=chunk.start, char_end=chunk.end,
-                chunk_metadata={"algorithm": settings.memory_chunk_version,
-                                "requested_embedding_model": settings.openrouter_embedding_model,
-                                "dimensions": settings.openrouter_embedding_dimensions},
-            ).on_conflict_do_nothing(index_elements=["source_id", "chunk_version", "chunk_index"]))
+        ensure_source_chunks(session, source, settings, source_id)
     with session.begin():
         ids = list(session.scalars(select(SourceChunk.id).where(
             SourceChunk.source_id == source_id, SourceChunk.chunk_version == version,
@@ -78,7 +86,7 @@ def filtered_scope(session, project=None, company=None, area=None):
     return allowed
 
 
-def semantic_statement(vector, settings, project_ids=None, source_type=None, date_from=None, date_to=None):
+def semantic_statement(vector, settings, project_ids=None, source_type=None, date_from=None, date_to=None, diversify=False):
     distance = SourceChunk.embedding.cosine_distance(vector)
     statement = select(SourceChunk, Source, distance.label("distance")).join(Source, Source.id == SourceChunk.source_id).where(
         SourceChunk.chunk_version == chunk_version(settings),
@@ -94,12 +102,19 @@ def semantic_statement(vector, settings, project_ids=None, source_type=None, dat
         statement = statement.where(Source.received_at >= date_from)
     if date_to:
         statement = statement.where(Source.received_at <= date_to)
+    if diversify:
+        ranked = statement.with_only_columns(
+            SourceChunk.id.label("candidate_id"),
+            func.row_number().over(partition_by=Source.primary_project_id,
+                                   order_by=(distance, Source.received_at.desc(), SourceChunk.id)).label("project_rank"),
+        ).order_by(None).cte("diverse_candidates")
+        statement = statement.join(ranked, ranked.c.candidate_id == SourceChunk.id).where(ranked.c.project_rank <= 3)
     return statement.order_by(distance, Source.received_at.desc(), SourceChunk.id)
 
 
 def semantic_search(session, query, settings, *, project=None, company=None, area=None,
-                    source_type=None, limit=5, project_ids=None, date_from=None, date_to=None):
-    if not query.strip() or len(query) > 3000 or not 1 <= limit <= 12:
+                    source_type=None, limit=5, project_ids=None, date_from=None, date_to=None, diversify=False):
+    if not query.strip() or len(query) > 3000 or not 1 <= limit <= 60:
         raise MemoryError("Consulta o límite no válido.")
     if source_type and source_type not in TEXT_SOURCE_TYPES:
         raise MemoryError("Tipo de fuente no textual.")
@@ -109,7 +124,7 @@ def semantic_search(session, query, settings, *, project=None, company=None, are
     if project_ids == []:
         return []
     vector = embed_texts([query], settings)[0]
-    rows = session.execute(semantic_statement(vector, settings, project_ids, source_type, date_from, date_to).limit(limit)).all()
+    rows = session.execute(semantic_statement(vector, settings, project_ids, source_type, date_from, date_to, diversify).limit(limit)).all()
     return [{
         "chunk_id": str(chunk.id), "source_id": str(source.id),
         "project_id": str(source.primary_project_id) if source.primary_project_id else None,

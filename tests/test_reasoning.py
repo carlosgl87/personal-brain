@@ -41,7 +41,7 @@ class ReasoningTests(unittest.TestCase):
 
     def test_plan_rejects_sql_excess_queries_invalid_scope_and_dates(self):
         invalid = ({"sql": "DROP TABLE sources"}, {"semantic_queries": ["q"] * 4},
-                   {"semantic_queries": [" "]}, {"recent_sources_limit": 11},
+                   {"semantic_queries": [" "]}, {"recent_sources_limit": 16},
                    {"recent_sources_limit": "5"}, {"scope_type": "project"},
                    {"scope_type": "global", "scope_value": "SIMA"},
                    {"include_tasks": "yes"}, {"date_from": "2026-10-01T00:00:00"},
@@ -87,7 +87,7 @@ class ReasoningTests(unittest.TestCase):
     def test_provider_schema_is_supported_and_local_limits_still_apply(self):
         client = MagicMock()
         client.post.return_value.json.return_value = {"stop_reason": "end_turn",
-            "content": [{"type": "text", "text": '{"recent_sources_limit": 11}'}]}
+            "content": [{"type": "text", "text": '{"recent_sources_limit": 16}'}]}
         with self.assertRaises(ReasoningError):
             call_json(settings(LLM_API_KEY="fake", LLM_MODEL="test"), "", {}, QueryPlan, client)
         wire = json.dumps(client.post.call_args.kwargs["json"]["output_config"])
@@ -143,7 +143,7 @@ class ReasoningTests(unittest.TestCase):
             result = retrieve(session, QueryPlan(semantic_queries=["one", "two"],
                 include_tasks=False, include_decisions=False, include_recent_sources=False), config)
         self.assertEqual(search.call_count, 2)
-        self.assertEqual(len(result["chunks"]), 8)
+        self.assertEqual(len(result["chunks"]), 10)
         self.assertEqual(result["chunks"][0]["distance"], 0)
 
     def test_embedding_failure_degrades_to_explicit_structured_coverage(self):
@@ -195,7 +195,7 @@ class ReasoningTests(unittest.TestCase):
         run = session.add.call_args.args[0]
         self.assertIsInstance(run, ReasoningRun)
         self.assertEqual(run.question_source_id, source_id)
-        self.assertEqual(run.planner_version, "memory-planner-v1")
+        self.assertEqual(run.planner_version, "memory-planner-v2-adaptive")
 
     def test_failed_claude_keeps_question_and_does_not_save_a_successful_run(self):
         session = MagicMock()

@@ -24,7 +24,7 @@ def main():
         settings.llm_credentials()
         with Session(get_engine()) as session:
             ids = [args.source_id] if args.source_id else list(session.scalars(
-                select(Source.id).where(Source.processing_status.in_(["pending", "failed", "pending_transcription", "transcription_failed"]))
+                select(Source.id).where(Source.processing_status.in_(["pending", "failed", "pending_transcription", "transcription_failed", "processing_parts", "parts_complete", "consolidating"]))
                 .order_by(Source.received_at, Source.id).limit(args.limit)
             ))
         for source_id in ids:

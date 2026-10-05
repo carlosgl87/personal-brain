@@ -11,6 +11,10 @@ from app.models.task_change import TaskChange
 from app.services.transcription import transcribe_audio
 
 
+class HierarchicalRequired(Exception):
+    pass
+
+
 class SourceNotFound(ValueError):
     pass
 
@@ -64,7 +68,9 @@ def process_text_source(session: Session, source_id: UUID, settings, force=False
             if force and session.scalar(select(TaskChange.id).join(Task, Task.id == TaskChange.task_id).where(Task.source_id == source.id).limit(1)) is not None:
                 raise SourceNotProcessable("La fuente tiene tareas editadas manualmente; el reprocesamiento esta bloqueado para conservar tus cambios.")
             if len(source.raw_content) > settings.extraction_max_chars:
-                raise SourceNotProcessable("Fuente demasiado larga para extraccion directa. Usa app.memory para recuperar todo el texto por chunks; extraccion jerarquica aun no disponible.")
+                if settings.hierarchical_extraction_enabled:
+                    raise HierarchicalRequired
+                raise SourceNotProcessable("Extraccion jerarquica deshabilitada; fuente completa conservada.")
             projects = session.scalars(select(Project).where(
                 Project.status == "active", Project.archived_at.is_(None),
             ).options(selectinload(Project.aliases), selectinload(Project.area),
@@ -100,6 +106,9 @@ def process_text_source(session: Session, source_id: UUID, settings, force=False
             source.processed_at = datetime.now(timezone.utc)
             response = run_result(run)
         return response
+    except HierarchicalRequired:
+        from app.services.hierarchical import process_hierarchical
+        return process_hierarchical(session, source_id, settings, force=force)
     except ExtractionError:
         # Mantiene el resultado previo si falla un reprocesamiento.
         with session.begin():

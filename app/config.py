@@ -26,6 +26,13 @@ class Settings(BaseSettings):
     memory_chunk_overlap: int = Field(default=350, ge=0, le=1000)
     memory_auto_index: bool = False
     extraction_max_chars: int = Field(default=30000, ge=1000, le=100000)
+    reasoning_context_max_chars: int = Field(default=100000, ge=5000, le=180000)
+    hierarchical_extraction_enabled: bool = True
+    hierarchical_max_chunks: int = Field(default=40, ge=1, le=100)
+    hierarchical_part_max_tokens: int = Field(default=4096, ge=1024, le=8192)
+    hierarchical_consolidation_max_items: int = Field(default=300, ge=10, le=1000)
+    hierarchical_consolidation_max_chars: int = Field(default=160000, ge=10000, le=300000)
+    hierarchical_consolidation_max_tokens: int = Field(default=12000, ge=4096, le=24000)
     stt_language: str = "es"
     audio_max_bytes: int = Field(default=20 * 1024 * 1024, ge=1024, le=20 * 1024 * 1024)
     audio_max_seconds: int = Field(default=600, ge=1, le=600)

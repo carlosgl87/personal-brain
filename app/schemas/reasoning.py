@@ -12,7 +12,8 @@ class QueryPlan(StrictModel):
     include_decisions: StrictBool = True
     include_recent_sources: StrictBool = True
     include_completed_tasks: StrictBool = False
-    recent_sources_limit: int = Field(default=5, ge=1, le=10, strict=True)
+    retrieval_depth: Literal["focused", "normal", "broad"] = "normal"
+    recent_sources_limit: int | None = Field(default=None, ge=1, le=15, strict=True)
     date_from: AwareDatetime | None = None
     date_to: AwareDatetime | None = None
 

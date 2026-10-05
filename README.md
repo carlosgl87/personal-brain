@@ -541,7 +541,7 @@ python -m app.ingest --file "C:\notas\nota.md" --type manual_note --process
 
 Guarda el texto completo, sin normalizar sus saltos de línea, más filename, sha256, file_size e ingest_method. No persiste la ruta absoluta. Solo resuelve nombres y aliases existentes; un nombre inexistente o ambiguo deja la fuente sin proyecto. El mismo contenido, tipo y proyecto reutiliza la fuente al reintentar. Después genera chunks y, si está configurado, embeddings.
 
-`--process` reutiliza la extracción de tareas y decisiones existente. **No hay extracción jerárquica todavía:** por encima de EXTRACTION_MAX_CHARS se rechaza explícitamente la extracción directa antes de llamar a Claude. La ingesta y la memoria permanecen disponibles para búsqueda y razonamiento; no se trunca silenciosamente el original. Las porciones limitadas de notas recientes usadas como contexto se marcan como truncadas.
+`--process` reutiliza la extraccion directa para fuentes cortas y la nueva extraccion jerarquica para fuentes largas cuando esta habilitada. Consulta la seccion de extraccion jerarquica mas abajo para limites, reintentos y provenance. Los originales se conservan completos.
 
 ### Búsqueda semántica
 
@@ -564,12 +564,124 @@ Los textos que comienzan con ¿ o terminan en ? usan reasoning. /ask y /pregunta
 
 La pregunta queda guardada como telegram_query y no crea tareas ni chunks. Claude recibe la pregunta, timestamp, America/Lima y catálogo; genera QueryPlan JSON. Pydantic rechaza campos extra, SQL, fechas sin zona, alcances inconsistentes y límites excesivos. La aplicación ejecuta funciones permitidas, sin SQL generado por el modelo.
 
-El contexto combina hasta 20 tareas, 20 decisiones, 10 fuentes recientes y 8 chunks deduplicados, además del catálogo acotado. Reutiliza filtros de última extracción exitosa, ediciones y transcripciones vigentes. El rango del plan filtra vencimiento de tareas, fecha de decisión y recepción de fuentes, respectivamente.
+El contexto ahora usa limites adaptativos focused / normal / broad y un presupuesto de caracteres; consulta la tabla de la evolucion siguiente. Reutiliza filtros de ultima extraccion exitosa, ediciones y transcripciones vigentes. El rango del plan filtra vencimiento de tareas, fecha de decision y recepcion de fuentes, respectivamente.
 
 Una segunda llamada a Claude sintetiza en español hechos e inferencias, indica evidencia insuficiente y cita fuentes como `[Fuente: UUID]`. La aplicación comprueba que los UUIDs citados pertenecen a la evidencia recuperada. Si no hay evidencia, responde sin segunda llamada. Si falla embeddings, se puede responder con estructura y notas recientes, indicando cobertura incompleta. Un fallo de Claude conserva la pregunta y permite reenviarla. Reintentar el mismo update con una respuesta ya confirmada reutiliza reasoning_runs.
 
 ### Límites y validación
 
-La recuperación es acotada; no garantiza revisar toda la historia ni reconstruir el estado global de cada proyecto. Los scopes de proyecto/empresa/área excluyen notas sin proyecto. Los originales completos permanecen en sources.raw_content; los chunks, resúmenes y respuestas son derivados. No hay clasificación NOTE/QUERY con LLM, cola de reintentos, extracción jerárquica ni memoria consolidada por proyecto.
+La recuperación es acotada; no garantiza revisar toda la historia ni reconstruir el estado global de cada proyecto. Los scopes de proyecto/empresa/área excluyen notas sin proyecto. Los originales completos permanecen en sources.raw_content; los chunks, resúmenes y respuestas son derivados. No hay clasificación NOTE/QUERY con LLM, cola de reintentos ni memoria consolidada por proyecto. La evolucion siguiente agrega extraccion jerarquica reanudable.
 
 Las pruebas usan mocks, Settings sin .env y compilación SQL offline: no llaman a proveedores, no acceden a Railway ni borran datos. El funcionamiento real de la extensión, embeddings, planner y respuestas debe verificarse después de aprobar migración/configuración. No hacer push a main hasta esa aprobación: Railway está conectado para autodeploy.
+
+## Recuperación adaptativa y extracción jerárquica
+
+Esta evolución sobre FASE 6A cambia el presupuesto de recuperación y permite extraer reuniones largas. Conserva SQL, semantic search, comandos determinísticos, el flujo planner → retrieval → synthesis y los originales inmutables. No agrega Project Memory, agentes ni procesamiento durante startup.
+
+### Adaptive retrieval
+
+QueryPlan agrega `retrieval_depth`. Claude elige un enum, y la aplicación establece los máximos:
+
+| Profundidad | Chunks | Fuentes recientes | Tareas | Decisiones |
+|---|---:|---:|---:|---:|
+| focused | 6 | 5 | 10 | 10 |
+| normal | 12 | 10 | 20 | 20 |
+| broad | 18 | 15 | 30 | 30 |
+
+`focused` corresponde a un hecho, persona o costo puntual; `normal`, al estado general de un proyecto; `broad`, a panoramas, evolución, riesgos y conexiones. La profundidad no cambia el alcance: broad de SIMA sigue filtrando SIMA. Un límite explícito de notas recientes solo puede reducir el máximo del nivel, nunca ampliarlo. El planner puede desactivar tareas, decisiones o notas recientes cuando no sean útiles.
+
+Para global + broad, cada consulta semántica obtiene hasta 54 candidatos, con hasta tres por proyecto antes del corte global. Fuentes sin proyecto forman otro grupo. La selección final alterna entre grupos ordenados por relevancia y conserva hasta 18 chunks. Se deduplican chunks entre consultas. Esto reduce el predominio de un proyecto, pero no garantiza revisar todos: depende de la relevancia, las fechas y la indexación disponible.
+
+`REASONING_CONTEXT_MAX_CHARS` limita los caracteres del JSON de evidencia enviado a la síntesis, incluyendo metadata y warnings, sin contar pregunta y system prompt. Primero se admiten tareas y decisiones; luego chunks, notas recientes y catálogo. Los elementos que no caben se omiten del contexto, con advertencia explícita de cobertura parcial; los originales no cambian. Un chunk grande puede omitirse mientras otro más pequeño todavía cabe.
+
+`reasoning_runs.plan` guarda la profundidad. `retrieved_context.retrieval` registra límites efectivos, cantidades antes/después del presupuesto, caracteres usados, presupuesto y si hubo reducción. La trace guarda IDs, fechas, estado, modelo/versión, distancias y hashes; no copia textos extensos de tareas, decisiones, chunks o transcripciones. Cambia la versión del planner a `memory-planner-v2-adaptive`.
+
+### Hierarchical extraction
+
+Las fuentes de hasta `EXTRACTION_MAX_CHARS` conservan la extracción directa existente: una llamada, sin extracción por chunks. Las más largas usan automáticamente el flujo jerárquico si está habilitado. Se aplica también a audio_transcript después de transcribir; no cambia el límite de audio ni segmenta audio binario.
+
+1. Se crean o reutilizan source_chunks de la versión activa mediante el servicio existente. Los embeddings no son un requisito para extraer.
+2. Claude extrae cada chunk. Cada parcial exitoso se confirma antes de continuar.
+3. Se guardan candidatos y evidencias exactas, con chunk_id y offsets globales. Un parcial no asigna ni cambia el proyecto de la fuente.
+4. Claude consolida resúmenes y candidatos, sin recibir nuevamente la transcripción completa.
+5. Después de validar la consolidación, se confirma atómicamente el ProcessingRun final, tareas, decisiones y evidencias.
+
+La migración aditiva **0007_hierarchical_extraction**, posterior a 0006, agrega:
+
+- `processing_run_parts`: source_id, chunk_id, chunk_version, índice, proveedor/modelo, prompt_version y resultado con evidencias.
+- `task_evidence` y `decision_evidence`: item definitivo, parcial, chunk, cita exacta y offsets globales. Una tarea puede tener evidencia de varios chunks.
+
+Las tablas nuevas tienen constraints e índices. Sus filas son inmutables mediante triggers; el downgrade destructivo está deshabilitado. No se modifican migraciones anteriores ni filas existentes, y no hay backfill.
+
+La idempotencia de parciales usa fuente + chunk + versión + prompt + modelo. Reintentar reutiliza parciales confirmados; cambiar modelo, prompt o versión de chunks produce otros parciales y conserva los anteriores. Si falla el chunk N, los anteriores permanecen. Si falla la consolidación, todos los parciales permanecen. Una extracción final confirmada se reutiliza sin nuevas llamadas, salvo reprocesamiento explícito.
+
+El consolidator elimina duplicados claros de overlap. La aplicación valida referencias de candidatos, citas y responsables/fechas fundamentados, conserva evidencias de todos los chunks y fusiona duplicados idénticos con offsets coincidentes. Hechos en posiciones distintas no se fusionan automáticamente solo por tener títulos iguales. Una consolidación que omite candidatos comprometidos se rechaza para reintentar en lugar de perderlos silenciosamente.
+
+Se respeta primary_project_id existente. Una propuesta nueva necesita catálogo y coincidencia inequívoca en el original; ante ambigüedad queda null. La consolidación distingue compromisos y acuerdos de ideas, dudas e hipótesis. El resumen global debe cubrir temas, cambios, problemas, acuerdos, próximos pasos y puntos abiertos cuando haya evidencia.
+
+### Configuración y costos
+
+| Variable nueva | Predeterminado |
+|---|---:|
+| REASONING_CONTEXT_MAX_CHARS | 100000 |
+| HIERARCHICAL_EXTRACTION_ENABLED | true |
+| HIERARCHICAL_MAX_CHUNKS | 40 |
+| HIERARCHICAL_PART_MAX_TOKENS | 4096 |
+| HIERARCHICAL_CONSOLIDATION_MAX_ITEMS | 300 |
+| HIERARCHICAL_CONSOLIDATION_MAX_CHARS | 160000 |
+| HIERARCHICAL_CONSOLIDATION_MAX_TOKENS | 12000 |
+
+`HIERARCHICAL_CONSOLIDATION_MAX_ITEMS` cuenta resúmenes parciales, candidatos y elementos auxiliares únicos. También se limita el JSON de consolidación por caracteres. Exceder un límite no trunca candidatos: detiene la extracción con originales, chunks y parciales confirmados conservados. Superar MAX_CHUNKS evita todas las llamadas de extracción de esa ejecución; los chunks quedan generados. Los embeddings son independientes y pueden estar pendientes.
+
+Una fuente corta sigue costando una llamada de extracción. Una larga cuesta hasta una llamada por chunk pendiente más una de consolidación, además de embeddings si se solicitaron. Las preguntas broad envían más contexto que focused, dentro del presupuesto. Los reintentos reutilizan únicamente llamadas cuyos resultados se confirmaron: un fallo después de recibir una respuesta externa pero antes del commit puede requerir repetir esa llamada.
+
+Estados de una fuente sin éxito previo: processing_parts → parts_complete → consolidating → processed; ante un fallo controlado, failed. Una interrupción puede dejarla en un estado intermedio, que app.process también selecciona para reintentar. En reprocesamiento, la extracción previa sigue vigente; un fallo no la reemplaza. El guard sobre tareas editadas manualmente sigue bloqueando reprocesamiento.
+
+### Probar una transcripción larga
+
+Ejecuta pruebas sin .env, proveedores ni base:
+
+```powershell
+python -m pip install -r requirements-dev.txt
+python -m unittest discover -s tests -v
+```
+
+Solo después de aprobar el cambio y elegir una base de prueba con pgvector disponible:
+
+```powershell
+alembic upgrade head
+python -m app.ingest --file "reunion_cima.txt" --type meeting_transcript --project "SIMA" --process
+```
+
+El archivo debe ser UTF-8 .txt o .md. El texto completo queda guardado, incluso si después falla la extracción. Conserva el UUID de fuente que imprime el CLI. Para continuar o reprocesar explícitamente:
+
+```powershell
+python -m app.process --source-id UUID
+python -m app.process --source-id UUID --reprocess
+```
+
+Sustituye UUID por el de esa fuente. No necesitas otro comando para seleccionar el modo largo. Para búsqueda, si hay embeddings configurados y algún fragmento sigue pendiente, puedes solicitar su indexación explícita después de aprobarla:
+
+```powershell
+python -m app.memory source UUID
+python -m app.memory search "preocupaciones del cliente sobre costos" --project "SIMA"
+```
+
+Con la versión desplegada y un solo receptor Telegram activo:
+
+```text
+/ask ¿Qué preocupaciones manifestó Jorge sobre SIMA?
+/ask Dame un panorama de SIMA: riesgos, pendientes y evolución.
+/pendientes SIMA
+/decisiones SIMA
+```
+
+Los detalles no convertidos en tareas o decisiones siguen presentes en los chunks. Los filtros de última extracción, edición y transcripción vigente continúan aplicándose al reasoning.
+
+### Límites operativos
+
+La extracción es síncrona y secuencial, sin cola ni scheduler; una reunión larga puede tardar varios minutos. El receptor espera hasta 3900 segundos por procesamiento; un corte o reinicio conserva commits anteriores y permite continuar por CLI. Para reuniones extensas, se recomienda ingesta por CLI. El recibo de Telegram sigue mostrando un resumen abreviado; el resumen consolidado completo queda en processing_runs.result.
+
+No hay consolidación por múltiples niveles si los parciales exceden los límites: la ejecución se detiene explícitamente para ajustar el tratamiento. La evidencia textual se valida de forma determinística; la calidad de resúmenes e inferencias todavía depende de Claude y necesita evaluación con reuniones reales.
+
+Las pruebas incluyen fallos por chunk, reanudación, consolidación, evidencias de tareas/decisiones, overlap, proyectos ambiguos, reuniones largas, audio y presupuestos adaptativos. Usan mocks y repositorios transaccionales en memoria; la migración se compila offline. Esta evolución queda local hasta confirmar migración, push y despliegue; no utiliza la autorización del despliegue anterior.
