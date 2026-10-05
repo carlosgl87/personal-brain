@@ -63,6 +63,8 @@ def process_text_source(session: Session, source_id: UUID, settings, force=False
                 return run_result(session.get(ProcessingRun, source.latest_processing_run_id), "already_processed")
             if force and session.scalar(select(TaskChange.id).join(Task, Task.id == TaskChange.task_id).where(Task.source_id == source.id).limit(1)) is not None:
                 raise SourceNotProcessable("La fuente tiene tareas editadas manualmente; el reprocesamiento esta bloqueado para conservar tus cambios.")
+            if len(source.raw_content) > settings.extraction_max_chars:
+                raise SourceNotProcessable("Fuente demasiado larga para extraccion directa. Usa app.memory para recuperar todo el texto por chunks; extraccion jerarquica aun no disponible.")
             projects = session.scalars(select(Project).where(
                 Project.status == "active", Project.archived_at.is_(None),
             ).options(selectinload(Project.aliases), selectinload(Project.area),

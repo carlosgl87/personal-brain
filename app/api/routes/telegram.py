@@ -1,4 +1,5 @@
 import hmac
+from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
@@ -9,6 +10,8 @@ from app.services.telegram_ingestion import authorized_message, ingest_update
 from app.services.queries import answer_query, parse_query
 from app.services.task_management import edit_task, parse_task_command
 from app.services.audio import AudioError, authorized_audio, ingest_audio
+from app.services.reasoning import answer_reasoning, reasoning_question
+from app.services.memory import maybe_index
 
 router = APIRouter(prefix="/telegram", tags=["telegram"])
 bearer = HTTPBearer(auto_error=False)
@@ -45,9 +48,17 @@ def receive_update(
         saved = ingest_update(session, update, user_id, is_query=True)
         return {"status": "answered", "source_id": saved["source_id"],
                 "answer": edit_task(session, command, saved["source_id"])}
-    query = parse_query(message["text"]) if message else None
+    question = reasoning_question(message["text"]) if message else None
+    if question is not None:
+        saved = ingest_update(session, update, user_id, is_query=True)
+        return {"status": "answered", "source_id": saved["source_id"],
+                "answer": answer_reasoning(session, question, saved["source_id"], settings)}
+    query = parse_query(message["text"]) if message and message["text"].strip().startswith("/") else None
     if query is None:
-        return ingest_update(session, update, user_id)
+        saved = ingest_update(session, update, user_id)
+        if saved["status"] in {"saved", "duplicate"}:
+            maybe_index(session, UUID(saved["source_id"]), settings)
+        return saved
     saved = ingest_update(session, update, user_id, is_query=True)
     return {"status": "answered", "source_id": saved["source_id"],
             "answer": answer_query(session, query)}

@@ -50,7 +50,7 @@ class TelegramAPI:
 def forward_update(client: httpx.Client, api_url: str, token: str, update: dict) -> dict:
     try:
         response = client.post(
-            api_url + "/telegram/updates", json=update,
+            api_url + "/telegram/updates", json=update, timeout=600,
             headers={"Authorization": "Bearer " + token},
         )
         response.raise_for_status()

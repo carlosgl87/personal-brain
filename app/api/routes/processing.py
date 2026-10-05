@@ -6,6 +6,7 @@ from app.config import Settings, get_settings
 from app.database import get_session
 from app.services.claude import ExtractionError
 from app.services.transcription import TranscriptionError
+from app.services.memory import maybe_index
 from app.services.processing import SourceNotFound, SourceNotProcessable, process_source
 
 router = APIRouter(prefix="/sources", tags=["processing"])
@@ -17,7 +18,9 @@ def process(
     settings: Settings = Depends(get_settings), session: Session = Depends(get_session),
 ):
     try:
-        return process_source(session, source_id, settings, force=force)
+        result = process_source(session, source_id, settings, force=force)
+        maybe_index(session, UUID(result.get("transcript_source_id", str(source_id))), settings)
+        return result
     except SourceNotFound:
         raise HTTPException(status_code=404, detail="Fuente no encontrada.") from None
     except SourceNotProcessable as exc:

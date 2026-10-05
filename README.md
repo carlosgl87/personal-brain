@@ -1,7 +1,7 @@
 
 # Personal Brain
 
-Base de un asistente para organizar información de trabajo. Incluye FASE 1 (catálogo), FASE 2 (texto de Telegram) , FASE 3 (extracción con Claude), FASE 4 (consultas SQL por Telegram) y FASE 5 (audio y transcripción con OpenRouter). No incluye RAG, embeddings, recordatorios ni frontend.
+Base de un asistente para organizar información de trabajo. Incluye FASE 1 (catálogo), FASE 2 (texto de Telegram) , FASE 3 (extracción con Claude), FASE 4 (consultas SQL por Telegram) y FASE 5 (audio y transcripción con OpenRouter). FASE 6A agrega memoria por chunks, embeddings y razonamiento; no incluye recordatorios ni frontend.
 
 FastAPI → SQLAlchemy 2 → PostgreSQL. Alembic administra el esquema; el seed administra los datos iniciales por separado. No se crean tablas al iniciar la aplicación.
 
@@ -212,11 +212,13 @@ Una salida truncada, un rechazo, JSON inválido, fechas sin zona, citas de evide
 
 Si falla la extracción inicial, processing_status pasa a failed para reintentar; si falla un reprocesamiento, la extracción exitosa anterior continúa vigente. Los errores de persistencia revierten la transacción. Ninguno de estos caminos cambia raw_content o raw_metadata. Las fechas derivadas se guardan con zona horaria; el prompt usa America/Lima y la fecha original del mensaje como referencia.
 
-El endpoint interno POST /sources/{source_id}/process usa la misma autenticación Bearer que la recepción de Telegram. force=true solicita reprocesar de forma explícita. No hay endpoints de escritura sin autenticación para este flujo. FASE 4 agrega consultas por Telegram y FASE 5 admite audio; embeddings, RAG, agentes y recordatorios siguen fuera del alcance.
+El endpoint interno POST /sources/{source_id}/process usa la misma autenticación Bearer que la recepción de Telegram. force=true solicita reprocesar de forma explícita. No hay endpoints de escritura sin autenticación para este flujo. FASE 4 agrega consultas por Telegram y FASE 5 admite audio; FASE 6A agrega embeddings y razonamiento; agentes y recordatorios siguen fuera del alcance.
 
 Las pruebas cubren respuestas simuladas, rechazo de datos inválidos, idempotencia, historial y compilación offline de migraciones. La migración y la extracción real se validan con los comandos anteriores. No se despliega en Railway automáticamente.
 
 ## FASE 4: consultas por Telegram con SQL
+
+En FASE 6A los ejemplos de preguntas naturales pasan al reasoning service; usa los comandos /pendientes y /decisiones para obtener el comportamiento SQL de esta fase.
 
 El mismo bot ahora responde consultas por proyecto, alias, empresa, área y responsable. No llama a Claude para interpretar o responder estas consultas: el reconocimiento de frases y comandos es determinista y la lectura se hace con SQLAlchemy/PostgreSQL.
 
@@ -266,7 +268,7 @@ Los comandos estables son /pendientes, /decisiones, /resumen, /estado, /ayuda y 
 
 Los nombres y aliases deben coincidir completos. Los nombres ambiguos requieren aclaración. Puedes precisar /pendientes proyecto SIMA, /pendientes empresa Catusita o /pendientes area Laureate. No hay fuzzy matching ni creación de entidades.
 
-Una pregunta no reconocida (comienza con ¿ o termina con ?) y los comandos desconocidos reciben ayuda. Para guardar una pregunta como nota, usa /nota seguido del texto. Ese texto completo, incluido el comando, se conserva como original.
+Antes de FASE 6A, una pregunta no reconocida (comienza con ¿ o termina con ?) y los comandos desconocidos reciben ayuda. Para guardar una pregunta como nota, usa /nota seguido del texto. Ese texto completo, incluido el comando, se conserva como original.
 
 Las consultas se guardan como sources de tipo telegram_query con processing_status=skipped, conservando texto y metadatos. No se extraen tareas de ellas ni aparecen entre los resúmenes de notas. El endpoint de procesamiento también rechaza una consulta, incluso con force=true. Reintentar un update reutiliza su fuente sin duplicarla y vuelve a consultar la información vigente.
 
@@ -470,3 +472,104 @@ git push origin main
 Agrega explícitamente otros archivos nuevos que correspondan al cambio. Las claves viven en Variables de Railway y .env local; nunca las incluyas en commits. .env.example contiene solo la configuración de ejemplo.
 
 Comprueba en Railway que el deployment corresponde al commit esperado y termina en Success. Las migraciones se ejecutan antes del arranque; un build o healthcheck fallido no debe darse por terminado. No uses railway up para el flujo habitual, porque desplegaría directamente el directorio local.
+
+## FASE 6 — Memory & Reasoning
+
+Implementación local de FASE 6A. Combina consultas SQL, recuperación semántica exacta y razonamiento con Claude. No agrega Project Memory, recordatorios, agentes, resúmenes programados ni frontend. Esta fase no requiere seed.
+
+### Esquema y configuración
+
+La migración **0006_memory_reasoning**, posterior a 0005, habilita pgvector con `CREATE EXTENSION IF NOT EXISTS vector` y crea dos tablas derivadas:
+
+- `source_chunks`: fragmentos textuales, offsets, versión, metadata, vector, modelo y dimensión. La restricción `unique(source_id, chunk_version, chunk_index)` evita duplicados.
+- `reasoning_runs`: pregunta, proveedor/modelo, versión del planner, plan validado, referencias recuperadas y respuesta. Guarda IDs, distancias y hashes; no copia transcripciones completas.
+
+Las migraciones anteriores y los originales de `sources` se conservan. El downgrade de esta migración se bloquea para evitar borrar historia. No se ejecuta ningún backfill durante imports, startup o deployment.
+
+**Antes de aplicar 0006 en producción, confirma el cambio.** PostgreSQL debe tener pgvector instalado y el usuario debe poder habilitar la extensión. La dependencia Python no instala la extensión del servidor. Si falta o no hay permisos, la migración aborta con un error claro; no reemplaces ni reinicies la base existente para resolverlo.
+
+Instala dependencias y verifica primero:
+
+```powershell
+python -m pip install -r requirements-dev.txt
+python -m unittest discover -s tests -v
+```
+
+Solo cuando hayas aprobado la migración y comprobado la base de destino:
+
+```powershell
+alembic upgrade head
+```
+
+Variables nuevas, con sus valores predeterminados:
+
+| Variable | Predeterminado | Uso |
+|---|---|---|
+| OPENROUTER_EMBEDDING_MODEL | vacío | Modelo de embeddings; vacío desactiva esa parte |
+| OPENROUTER_EMBEDDING_DIMENSIONS | 2560 | Dimensión nativa esperada; se valida cada respuesta |
+| MEMORY_AUTO_INDEX | false | Indexar cada nota nueva de Telegram y transcripción procesada |
+| MEMORY_CHUNK_VERSION | paragraph-v1 | Versión del algoritmo |
+| MEMORY_CHUNK_SIZE | 6000 | Caracteres por fragmento, entre 4000 y 7000 |
+| MEMORY_CHUNK_OVERLAP | 350 | Overlap entre fragmentos |
+| EXTRACTION_MAX_CHARS | 30000 | Máximo para extracción directa existente |
+
+Se reutilizan `OPENROUTER_API_KEY` y `LLM_PROVIDER=anthropic`, `LLM_MODEL`, `LLM_API_KEY`. No necesitas una clave adicional. Para probar puedes seleccionar `OPENROUTER_EMBEDDING_MODEL=qwen/qwen3-embedding-4b` con dimensión 2560; consulta el [modelo en OpenRouter](https://openrouter.ai/qwen/qwen3-embedding-4b) y la [configuración oficial de Qwen](https://huggingface.co/Qwen/Qwen3-Embedding-4B/blob/main/config.json). No se carga el modelo en Railway ni en tu computadora.
+
+El servicio utiliza la [API de embeddings de OpenRouter](https://openrouter.ai/docs/api/api-reference/embeddings/submit-an-embedding-request). Envía el texto de cada chunk y, en las búsquedas, el texto de la consulta; no envía metadata de Telegram ni credenciales dentro del contenido. Espera la dimensión nativa del modelo, sin solicitar reducción de dimensiones. Modelos y dimensiones diferentes nunca se mezclan en una búsqueda. Cambiar modelo, dimensión, tamaño u overlap produce otra versión y conserva los chunks anteriores.
+
+Reinicia la API tras cambiar configuración. Deja `MEMORY_AUTO_INDEX=false` mientras pruebas de forma manual. Activarlo no procesa el histórico: solo nuevas notas y transcripciones que pasan por el endpoint de procesamiento. Las llamadas a embeddings y Claude consumen saldo de sus proveedores.
+
+### Chunking, backfill y reintentos
+
+El chunking es determinístico: prioriza párrafos, saltos y frases, conserva offsets exactos y añade overlap. Se admiten telegram_text, audio_transcript, meeting_transcript, manual_note y document_text. Las preguntas y el audio original no se indexan; se utiliza su transcripción.
+
+```powershell
+python -m app.memory backfill --limit 10
+python -m app.memory source UUID
+```
+
+Sustituye `UUID` por un UUID de fuente real. El backfill admite de 1 a 100 fuentes por ejecución. Selecciona fuentes vigentes sin chunks de la versión activa y también chunks sin embedding cuando este está configurado. Confirma los chunks antes de llamar a OpenRouter y cada embedding por separado. Si una llamada falla, los originales y los commits previos permanecen; el siguiente intento continúa con lo pendiente. Sin modelo configurado crea chunks y los deja pendientes de embeddings.
+
+### Ingresar una reunión larga
+
+Archivos UTF-8 `.txt` y `.md`, máximo 10 MiB:
+
+```powershell
+python -m app.ingest --file "C:\notas\reunion.txt" --type meeting_transcript --project "SIMA"
+python -m app.ingest --file "C:\notas\nota.md" --type manual_note --process
+```
+
+Guarda el texto completo, sin normalizar sus saltos de línea, más filename, sha256, file_size e ingest_method. No persiste la ruta absoluta. Solo resuelve nombres y aliases existentes; un nombre inexistente o ambiguo deja la fuente sin proyecto. El mismo contenido, tipo y proyecto reutiliza la fuente al reintentar. Después genera chunks y, si está configurado, embeddings.
+
+`--process` reutiliza la extracción de tareas y decisiones existente. **No hay extracción jerárquica todavía:** por encima de EXTRACTION_MAX_CHARS se rechaza explícitamente la extracción directa antes de llamar a Claude. La ingesta y la memoria permanecen disponibles para búsqueda y razonamiento; no se trunca silenciosamente el original. Las porciones limitadas de notas recientes usadas como contexto se marcan como truncadas.
+
+### Búsqueda semántica
+
+```powershell
+python -m app.memory search "riesgos de adopción del dashboard" --project "SIMA" --limit 5
+python -m app.memory search "inventarios" --company "Catusita" --area "Consultora" --type meeting_transcript
+```
+
+Los filtros se intersectan. Los nombres desconocidos o ambiguos requieren aclaración; nunca amplían el alcance a global. La búsqueda exacta por cosine distance selecciona únicamente chunks de fuentes vigentes y de la versión/modelo/dimensión activos. Devuelve chunk_id, source_id, project_id, fecha, contenido, offsets y distancia/score. No usa HNSW ni una base vectorial externa. El CLI imprime los resultados solicitados, incluidos sus textos.
+
+### Preguntas por Telegram
+
+```text
+/ask ¿Qué temas importantes aparecen en mis últimas notas de Catusita?
+/pregunta ¿Qué riesgos se repiten en las reuniones de SIMA?
+¿Qué debería perseguir esta semana?
+```
+
+Los textos que comienzan con ¿ o terminan en ? usan reasoning. /ask y /pregunta lo fuerzan. Los demás textos se guardan como notas; /nota permite conservar una pregunta como nota. Los comandos /pendientes, /decisiones, /resumen, /estado, /completar, /reabrir, /fecha, /responsable, /proyecto y /ayuda mantienen su flujo determinístico sin llamadas a Claude.
+
+La pregunta queda guardada como telegram_query y no crea tareas ni chunks. Claude recibe la pregunta, timestamp, America/Lima y catálogo; genera QueryPlan JSON. Pydantic rechaza campos extra, SQL, fechas sin zona, alcances inconsistentes y límites excesivos. La aplicación ejecuta funciones permitidas, sin SQL generado por el modelo.
+
+El contexto combina hasta 20 tareas, 20 decisiones, 10 fuentes recientes y 8 chunks deduplicados, además del catálogo acotado. Reutiliza filtros de última extracción exitosa, ediciones y transcripciones vigentes. El rango del plan filtra vencimiento de tareas, fecha de decisión y recepción de fuentes, respectivamente.
+
+Una segunda llamada a Claude sintetiza en español hechos e inferencias, indica evidencia insuficiente y cita fuentes como `[Fuente: UUID]`. La aplicación comprueba que los UUIDs citados pertenecen a la evidencia recuperada. Si no hay evidencia, responde sin segunda llamada. Si falla embeddings, se puede responder con estructura y notas recientes, indicando cobertura incompleta. Un fallo de Claude conserva la pregunta y permite reenviarla. Reintentar el mismo update con una respuesta ya confirmada reutiliza reasoning_runs.
+
+### Límites y validación
+
+La recuperación es acotada; no garantiza revisar toda la historia ni reconstruir el estado global de cada proyecto. Los scopes de proyecto/empresa/área excluyen notas sin proyecto. Los originales completos permanecen en sources.raw_content; los chunks, resúmenes y respuestas son derivados. No hay clasificación NOTE/QUERY con LLM, cola de reintentos, extracción jerárquica ni memoria consolidada por proyecto.
+
+Las pruebas usan mocks, Settings sin .env y compilación SQL offline: no llaman a proveedores, no acceden a Railway ni borran datos. El funcionamiento real de la extensión, embeddings, planner y respuestas debe verificarse después de aprobar migración/configuración. No hacer push a main hasta esa aprobación: Railway está conectado para autodeploy.

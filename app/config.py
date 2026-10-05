@@ -19,6 +19,13 @@ class Settings(BaseSettings):
     telegram_user_id: SecretStr | None = None
     openrouter_api_key: SecretStr | None = None
     openrouter_stt_model: str = Field(default="openai/whisper-large-v3-turbo", min_length=1, max_length=200)
+    openrouter_embedding_model: str | None = Field(default=None, max_length=200)
+    openrouter_embedding_dimensions: int = Field(default=2560, ge=1, le=16000)
+    memory_chunk_version: str = Field(default="paragraph-v1", min_length=1, max_length=80)
+    memory_chunk_size: int = Field(default=6000, ge=4000, le=7000)
+    memory_chunk_overlap: int = Field(default=350, ge=0, le=1000)
+    memory_auto_index: bool = False
+    extraction_max_chars: int = Field(default=30000, ge=1000, le=100000)
     stt_language: str = "es"
     audio_max_bytes: int = Field(default=20 * 1024 * 1024, ge=1024, le=20 * 1024 * 1024)
     audio_max_seconds: int = Field(default=600, ge=1, le=600)

@@ -212,7 +212,7 @@ class QueryTests(unittest.TestCase):
         app.dependency_overrides[get_session] = lambda: MagicMock()
         source_id = str(uuid4())
         client = TestClient(app)
-        update = telegram_update("¿Qué tengo pendiente de SIMA?")
+        update = telegram_update("/pendientes SIMA")
         with patch("app.api.routes.telegram.ingest_update", return_value={
             "status": "duplicate", "source_id": source_id,
         }) as ingest, patch("app.api.routes.telegram.answer_query", return_value="Enviar informe"):

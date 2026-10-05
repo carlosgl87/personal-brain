@@ -9,7 +9,12 @@ from sqlalchemy.orm import aliased, selectinload
 from app.models import Area, Company, Decision, ProcessingRun, Project, Source, Task
 from app.services.normalization import normalize
 
-HELP = """Gestionar tareas (UUID mostrado en /pendientes):
+HELP = """Preguntas con evidencia:
+ /ask texto de la pregunta
+ /pregunta texto de la pregunta
+ Las preguntas con signos de interrogacion usan Claude.
+
+Gestionar tareas (UUID mostrado en /pendientes):
  /completar UUID
  /reabrir UUID
  /fecha UUID AAAA-MM-DD HH:MM (Lima)
