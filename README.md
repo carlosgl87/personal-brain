@@ -438,7 +438,7 @@ En Railway verifica el build, la migración previa y el deployment. Los logs deb
 
 Comprueba /pendientes SIMA y una nota de voz desde Telegram. Después reinicia el servicio y vuelve a consultar. Solo tras estas comprobaciones puedes cerrar las terminales locales y apagar la computadora. No ejecutes un seed adicional ni cambies el servicio PostgreSQL para desplegar.
 
-Los fallos de transcripción o Claude conservan el original para reintentar con app.process. Todavía no hay una cola automática de recuperación de esos pendientes. Las confirmaciones de notas son de mejor esfuerzo; un reinicio puede repetir respuestas a consultas guardadas. La CLI carga código, pero no crea un flujo de autodeploy en GitHub: esa conexión se puede configurar posteriormente.
+Los fallos de transcripción o Claude conservan el original para reintentar con app.process. Todavía no hay una cola automática de recuperación de esos pendientes. Las confirmaciones de notas son de mejor esfuerzo; un reinicio puede repetir respuestas a consultas guardadas. La carga inicial por CLI se sustituyó posteriormente por la conexión de GitHub descrita abajo.
 
 
 ### Estado del primer despliegue
@@ -449,4 +449,24 @@ La carga inicial por CLI detectó railway.json, pero no aplicó correctamente el
 
 La CLI actual advierte que railway.json sigue funcionando hasta el 1 de diciembre de 2026 y recomienda migrar a su formato Infrastructure as Code. Antes de esa fecha, revisar y migrar la configuración con railway config migrate; esta advertencia no significa que el servicio actual se haya detenido.
 
-No se conectaron autodeploys de GitHub ni se modificó la configuración de backups de PostgreSQL. Los cambios locales futuros necesitan otro railway up o una conexión de repositorio configurada posteriormente. No enciendas el bot local mientras Railway esté activo.
+El despliegue inicial no conectó autodeploys; posteriormente se conectó GitHub como se explica abajo. No se modificó la configuración de backups de PostgreSQL. Los cambios futuros se publican mediante push a main. No enciendas el bot local mientras Railway esté activo.
+
+
+### Despliegues automáticos desde GitHub
+
+La fuente del servicio personal-brain es carlosgl87/personal-brain, rama main. El primer despliegue se cargó por CLI; el flujo habitual ahora es guardar cambios en Git y hacer push a main. Railway debe generar el despliegue asociado al commit. Guardar un archivo local o hacer solo commit no lo publica.
+
+Antes de subir cambios ejecuta las pruebas y revisa los archivos:
+
+```powershell
+python -m unittest discover -s tests -q
+git status --short
+git diff --check
+git add app migrations tests README.md Dockerfile railway.json
+git commit -m "Describe el cambio"
+git push origin main
+```
+
+Agrega explícitamente otros archivos nuevos que correspondan al cambio. Las claves viven en Variables de Railway y .env local; nunca las incluyas en commits. .env.example contiene solo la configuración de ejemplo.
+
+Comprueba en Railway que el deployment corresponde al commit esperado y termina en Success. Las migraciones se ejecutan antes del arranque; un build o healthcheck fallido no debe darse por terminado. No uses railway up para el flujo habitual, porque desplegaría directamente el directorio local.
