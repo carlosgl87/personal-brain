@@ -105,6 +105,7 @@ class PhaseOneTests(unittest.TestCase):
         client = TestClient(app)
         self.assertEqual(client.get("/health").json(), {"status": "ok"})
         with patch("app.api.routes.health.get_engine") as engine:
+            engine.return_value.connect.return_value.__enter__.return_value.execute.return_value.scalars.return_value.all.return_value = ["0009_project_memory"]
             self.assertEqual(client.get("/health/db").status_code, 200)
             engine.side_effect = RuntimeError("test-secret")
             response = client.get("/health/db")
@@ -112,6 +113,8 @@ class PhaseOneTests(unittest.TestCase):
             self.assertNotIn("test-secret", response.text)
 
     def test_projects_filters_and_detail(self):
+        from app.api.routes.telegram import require_telegram_access
+        app.dependency_overrides[require_telegram_access] = lambda: 123
         session = MagicMock()
         app.dependency_overrides[get_session] = lambda: session
         client = TestClient(app)

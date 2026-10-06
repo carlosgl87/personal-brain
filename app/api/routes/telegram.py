@@ -12,6 +12,7 @@ from app.services.task_management import edit_task, parse_task_command
 from app.services.audio import AudioError, authorized_audio, ingest_audio
 from app.services.reasoning import answer_reasoning, reasoning_question
 from app.services.memory import maybe_index
+from app.services.project_memory_events import parse_refresh, schedule_refresh
 
 router = APIRouter(prefix="/telegram", tags=["telegram"])
 bearer = HTTPBearer(auto_error=False)
@@ -43,11 +44,16 @@ def receive_update(
         except AudioError:
             raise HTTPException(status_code=502, detail="No se completó la descarga del audio; se puede reintentar.") from None
     message = authorized_message(update, user_id)
+    refresh = parse_refresh(message["text"]) if message else None
+    if refresh is not None:
+        saved = ingest_update(session, update, user_id, is_query=True)
+        answer = schedule_refresh(session, refresh, settings, origin_key="telegram:" + saved["source_id"]) if refresh else "Usa /refrescar NombreProyecto."
+        return {"status": "answered", "source_id": saved["source_id"], "answer": answer}
     command = parse_task_command(message["text"]) if message else None
     if command is not None:
         saved = ingest_update(session, update, user_id, is_query=True)
         return {"status": "answered", "source_id": saved["source_id"],
-                "answer": edit_task(session, command, saved["source_id"])}
+                "answer": edit_task(session, command, saved["source_id"], settings=settings)}
     question = reasoning_question(message["text"]) if message else None
     if question is not None:
         saved = ingest_update(session, update, user_id, is_query=True)

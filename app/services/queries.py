@@ -9,7 +9,9 @@ from sqlalchemy.orm import aliased, selectinload
 from app.models import Area, Company, Decision, ProcessingRun, Project, Source, Task
 from app.services.normalization import normalize
 
-HELP = """Preguntas con evidencia:
+HELP = """Actualizar contexto del proyecto:
+ /refrescar SIMA (encola la actualizacion; tambien /refresh)
+Preguntas con evidencia:
  /ask texto de la pregunta
  /pregunta texto de la pregunta
  Las preguntas con signos de interrogacion usan Claude.
@@ -56,7 +58,8 @@ def parse_query(text: str) -> Query | None:
         return None
     normalized = normalize(raw)
     if raw.startswith("/"):
-        command, _, arguments = raw.partition(" ")
+        parts = raw.split(maxsplit=1)
+        command, arguments = parts[0], parts[1] if len(parts) > 1 else ""
         command = command.casefold().split("@")[0]
         target = normalize(arguments)
         if command == "/pendientes":

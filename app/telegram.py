@@ -15,6 +15,12 @@ class PollingError(RuntimeError):
     pass
 
 
+class RetryablePollingError(PollingError):
+    def __init__(self, message, retry_after=5):
+        super().__init__(message)
+        self.retry_after = max(1, min(retry_after, 300))
+
+
 class TelegramAPI:
     def __init__(self, client: httpx.Client, token: str):
         self.client = client
@@ -28,7 +34,14 @@ class TelegramAPI:
             if response.status_code == 409:
                 raise PollingError("Telegram detectó otro polling o un webhook. Detén el otro proceso; no se cambia el webhook.")
             if response.status_code == 429:
-                raise PollingError("Telegram limitó temporalmente las solicitudes. Espera antes de reiniciar.")
+                try:
+                    delay = response.json().get("parameters", {}).get("retry_after", 5)
+                except Exception:
+                    delay = 5
+                delay = delay if type(delay) is int else 5
+                raise RetryablePollingError("Telegram limito temporalmente las solicitudes; se reintentara.", delay)
+            if response.status_code >= 500:
+                raise RetryablePollingError("Telegram no esta disponible; se reintentara.")
             response.raise_for_status()
             data = response.json()
             if not isinstance(data, dict) or data.get("ok") is not True or "result" not in data:
@@ -36,6 +49,8 @@ class TelegramAPI:
             return data["result"]
         except PollingError:
             raise
+        except httpx.TransportError:
+            raise RetryablePollingError("No se pudo conectar con Telegram; se reintentara.") from None
         except Exception:
             raise PollingError("No se pudo completar la solicitud a Telegram; detalles sensibles omitidos.") from None
 
@@ -59,7 +74,7 @@ def forward_update(client: httpx.Client, api_url: str, token: str, update: dict)
             raise ValueError
         return result
     except Exception:
-        raise PollingError("FastAPI no confirmó la recepción. Verifica servidor, migraciones y configuración; el mensaje se reintentará.") from None
+        raise RetryablePollingError("FastAPI no confirmó la recepción. Verifica servidor, migraciones y configuración; el mensaje se reintentará.") from None
 
 
 def process_saved_source(client, api_url, token, source_id):
@@ -137,18 +152,24 @@ def run(port: int, processing=False):
     # Sin proxies de entorno, redirecciones ni URLs configurables que filtren el token.
     with httpx.Client(timeout=40, trust_env=False, follow_redirects=False) as client:
         telegram = TelegramAPI(client, token)
-        telegram.ensure_no_webhook()
+        while True:
+            try:
+                telegram.ensure_no_webhook()
+                break
+            except RetryablePollingError as exc:
+                print(str(exc))
+                time.sleep(exc.retry_after)
         print("Telegram texto y audio activos. Solo se acepta el usuario autorizado en chat privado. Ctrl+C para detener.")
         offset = None
+        failures = 0
         while True:
             try:
                 offset = poll_once(client, telegram, api_url, token, user_id, offset, processing=processing)
-            except PollingError as exc:
-                if str(exc).startswith("FastAPI no confirmó"):
-                    print(str(exc))
-                    time.sleep(5)
-                    continue
-                raise
+                failures = 0
+            except RetryablePollingError as exc:
+                failures += 1
+                print(str(exc))
+                time.sleep(max(exc.retry_after, min(60, 2 ** min(failures, 6))))
 
 
 def main():

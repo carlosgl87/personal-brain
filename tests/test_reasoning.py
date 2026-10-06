@@ -22,7 +22,7 @@ from app.services.reasoning_llm import ReasoningError, call_json, plan_question,
 
 def settings(**kwargs):
     with patch.dict("os.environ", {}, clear=True):
-        return Settings(_env_file=None, **kwargs)
+        return Settings(_env_file=None, **({"PROJECT_MEMORY_ENABLED": False} | kwargs))
 
 
 def context():
@@ -195,7 +195,7 @@ class ReasoningTests(unittest.TestCase):
         run = session.add.call_args.args[0]
         self.assertIsInstance(run, ReasoningRun)
         self.assertEqual(run.question_source_id, source_id)
-        self.assertEqual(run.planner_version, "memory-planner-v2-adaptive")
+        self.assertEqual(run.planner_version, "memory-planner-v3-project-memory")
 
     def test_failed_claude_keeps_question_and_does_not_save_a_successful_run(self):
         session = MagicMock()

@@ -4,11 +4,12 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.database import get_session
+from app.api.routes.telegram import require_telegram_access
 from app.models import Area, Category, Company, Project
 from app.schemas.project import ProjectRead
 from app.services.normalization import slugify
 
-router = APIRouter(prefix="/projects", tags=["projects"])
+router = APIRouter(prefix="/projects", tags=["projects"], dependencies=[Depends(require_telegram_access)])
 
 
 def project_query():

@@ -1,6 +1,7 @@
 """OpenRouter embeddings: validación de cardinalidad, dimensión y valores."""
 import logging
 import math
+import struct
 import httpx
 
 
@@ -30,13 +31,19 @@ def embed_texts(texts, settings, client=None):
             response.raise_for_status()
             payload = response.json()
             rows = payload["data"]
+            if not isinstance(rows, list) or any(type(r.get("index")) is not int for r in rows):
+                raise ValueError
             if len(rows) != len(texts) or {r["index"] for r in rows} != set(range(len(texts))):
                 raise ValueError
             vectors = [row["embedding"] for row in sorted(rows, key=lambda row: row["index"])]
             for vector in vectors:
                 if not isinstance(vector, list) or len(vector) != settings.openrouter_embedding_dimensions:
                     raise ValueError
-                if any(type(x) not in (int, float) or not math.isfinite(x) for x in vector) or not any(vector):
+                if any(type(x) not in (int, float) or not math.isfinite(x) for x in vector):
+                    raise ValueError
+                # pgvector stores float32: finite float64 values may still overflow or underflow.
+                stored = [struct.unpack("f", struct.pack("f", x))[0] for x in vector]
+                if not all(math.isfinite(x) for x in stored) or not any(stored):
                     raise ValueError
             return vectors
         except Exception:

@@ -27,6 +27,8 @@ def authorized_envelope(update: dict, user_id: int) -> dict | None:
         return None
     if type(message.get("date")) is not int or message["date"] < 0:
         return None
+    if "edited_message" in update and (type(message.get("edit_date")) is not int or message["edit_date"] < 0):
+        return None
     return message
 
 

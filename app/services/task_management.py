@@ -11,6 +11,7 @@ from app.models import Source, Task
 from app.models.task_change import TaskChange
 from app.services.normalization import normalize
 from app.services.queries import current_derived, resolve_scope
+from app.services.project_memory_events import mark_dirty
 
 COMMANDS = {"/completar", "/reabrir", "/fecha", "/responsable", "/proyecto"}
 HELP = """Gestionar una tarea usando su UUID (aparece en /pendientes):
@@ -56,7 +57,7 @@ def snapshot(task):
     }
 
 
-def edit_task(session, command, command_source_id):
+def edit_task(session, command, command_source_id, settings=None):
     if command.error:
         return command.error
     with session.begin():
@@ -108,6 +109,13 @@ def edit_task(session, command, command_source_id):
             return HELP
         after = snapshot(task)
         answer = "Tarea actualizada: " + str(task.id) + "\nAcción: " + command.action + "\n" + HELP.splitlines()[-1]
-        session.add(TaskChange(id=uuid4(), task_id=task.id, command_source_id=command_source_id,
+        change_id = uuid4()
+        session.add(TaskChange(id=change_id, task_id=task.id, command_source_id=command_source_id,
                                action=command.action, before=before, after=after, answer=answer))
+        if settings is not None and before != after:
+            projects = {UUID(value) for value in (before["project_id"], after["project_id"]) if value}
+            for project_id in sorted(projects, key=str):
+                mark_dirty(session, project_id, settings, origin_key="task:" + str(change_id),
+                           source_id=task.source_id, task_id=task.id, command_source_id=command_source_id,
+                           event_type="task_change")
         return answer

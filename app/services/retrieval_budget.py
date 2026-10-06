@@ -50,8 +50,8 @@ def context_size(context):
 
 
 def bound_context(context, plan, limits, max_chars):
-    keys = ("tasks", "decisions", "chunks", "recent_sources", "projects")
-    original = {key: list(context[key]) for key in keys}
+    keys = ("tasks", "decisions", "chunks", "recent_sources", "projects", "project_memories", "new_sources")
+    original = {key: list(context.get(key, [])) for key in keys}
     result = {key: value for key, value in context.items() if key not in keys}
     result["warnings"] = list(context["warnings"])
     result.update({key: [] for key in keys})
@@ -61,7 +61,8 @@ def bound_context(context, plan, limits, max_chars):
     result["retrieval"] = info
     # Reserve space for counts, coverage warnings and final length metadata.
     reserve = 1200
-    ordered = []
+    ordered = [("new_sources", item) for item in original["new_sources"]]
+    ordered += [("project_memories", item) for item in original["project_memories"]]
     for index in range(max(len(original["tasks"]), len(original["decisions"]))):
         for key in ("tasks", "decisions"):
             if index < len(original[key]):
@@ -69,6 +70,11 @@ def bound_context(context, plan, limits, max_chars):
     ordered += [(key, item) for key in ("chunks", "recent_sources", "projects") for item in original[key]]
     accepted = []
     for key, item in ordered:
+        if key == "project_memories" and item.get("is_dirty"):
+            required = [delta for delta in original["new_sources"] if delta.get("project_id") == item.get("project_id")]
+            if any(delta not in result["new_sources"] for delta in required):
+                info["budget_reduced"] = True
+                continue  # Never keep old memory when its conflicting delta could not fit.
         result[key].append(item)
         if context_size(result) > max_chars - reserve:
             result[key].pop()

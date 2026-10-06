@@ -14,7 +14,10 @@ def main():
     parser.add_argument("--source-id", type=UUID)
     parser.add_argument("--limit", type=int, default=10)
     parser.add_argument("--reprocess", action="store_true")
+    parser.add_argument("--refresh-parts", action="store_true")
     args = parser.parse_args()
+    if args.refresh_parts and not args.reprocess:
+        parser.error("--refresh-parts requiere --reprocess y --source-id.")
     if args.limit < 1 or args.limit > 100:
         parser.error("--limit debe estar entre 1 y 100.")
     if args.reprocess and args.source_id is None:
@@ -29,7 +32,7 @@ def main():
             ))
         for source_id in ids:
             with Session(get_engine()) as session:
-                result = process_source(session, source_id, settings, force=args.reprocess)
+                result = process_source(session, source_id, settings, force=args.reprocess, **({"refresh_parts": True} if args.refresh_parts else {}))
             print(f"Fuente {source_id}: {result['status']}; tareas={result['tasks_count']}, decisiones={result['decisions_count']}")
         print("Procesamiento terminado.")
     except SourceNotProcessable as exc:

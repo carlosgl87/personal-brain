@@ -8,6 +8,8 @@ from app.models import Decision, ProcessingRun, Project, Source, Task
 from app.services.claude import ExtractionError, PROMPT_VERSION, extract
 from app.services.project_matching import match_project
 from app.models.task_change import TaskChange
+from app.services.project_memory_events import mark_dirty
+from app.services.source_revisions import revision_projects
 from app.services.transcription import transcribe_audio
 
 
@@ -32,13 +34,15 @@ def run_result(run, status="processed"):
     }
 
 
-def process_source(session: Session, source_id: UUID, settings, force=False):
+def process_source(session: Session, source_id: UUID, settings, force=False, refresh_parts=False):
     settings.llm_credentials()
+    if refresh_parts and not force:
+        raise SourceNotProcessable("--refresh-parts requiere --reprocess.")
     with session.begin():
         kind = session.scalar(select(Source.source_type).where(Source.id == source_id))
     if kind == "telegram_audio":
         transcript_id = transcribe_audio(session, source_id, settings)
-        result = process_text_source(session, transcript_id, settings, force=force)
+        result = process_text_source(session, transcript_id, settings, force=force, **({"refresh_parts": True} if refresh_parts else {}))
         result["audio_source_id"] = str(source_id)
         result["transcript_source_id"] = str(transcript_id)
         with session.begin():
@@ -47,10 +51,12 @@ def process_source(session: Session, source_id: UUID, settings, force=False):
                 .where(Source.id == transcript_id)
             )
         return result
-    return process_text_source(session, source_id, settings, force=force)
+    return process_text_source(session, source_id, settings, force=force, **({"refresh_parts": True} if refresh_parts else {}))
 
 
-def process_text_source(session: Session, source_id: UUID, settings, force=False):
+def process_text_source(session: Session, source_id: UUID, settings, force=False, refresh_parts=False):
+    if refresh_parts and not force:
+        raise SourceNotProcessable("--refresh-parts requiere --reprocess.")
     # Configuración inválida no modifica fuentes ni abre llamadas externas.
     settings.llm_credentials()
     try:
@@ -71,6 +77,7 @@ def process_text_source(session: Session, source_id: UUID, settings, force=False
                 if settings.hierarchical_extraction_enabled:
                     raise HierarchicalRequired
                 raise SourceNotProcessable("Extraccion jerarquica deshabilitada; fuente completa conservada.")
+            affected = revision_projects(session, source)
             projects = session.scalars(select(Project).where(
                 Project.status == "active", Project.archived_at.is_(None),
             ).options(selectinload(Project.aliases), selectinload(Project.area),
@@ -104,11 +111,15 @@ def process_text_source(session: Session, source_id: UUID, settings, force=False
             source.latest_processing_run_id = run.id
             source.processing_status = "processed"
             source.processed_at = datetime.now(timezone.utc)
+            affected.add(project_id)
+            for affected_id in sorted(affected, key=str):
+                mark_dirty(session, affected_id, settings, origin_key="run:" + str(run.id), source_id=source.id,
+                    event_type="source_revision" if "edited_message" in source.raw_metadata else "processed_source")
             response = run_result(run)
         return response
     except HierarchicalRequired:
         from app.services.hierarchical import process_hierarchical
-        return process_hierarchical(session, source_id, settings, force=force)
+        return process_hierarchical(session, source_id, settings, force=force, **({"refresh_parts": True} if refresh_parts else {}))
     except ExtractionError:
         # Mantiene el resultado previo si falla un reprocesamiento.
         with session.begin():

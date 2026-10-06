@@ -12,7 +12,7 @@ from sqlalchemy.dialects import postgresql
 
 from app.config import Settings
 from app.models import (Source, SourceChunk, ProcessingRunPart, ProcessingRun, Project,
-                        Task, Decision, TaskEvidence, DecisionEvidence, TaskChange)
+                        Task, Decision, TaskEvidence, DecisionEvidence, TaskChange, ExtractionGeneration, GenerationPart)
 from app.schemas.extraction import Extraction
 from app.schemas.hierarchical import ConsolidatedExtraction
 from app.services.claude import ExtractionError
@@ -27,7 +27,7 @@ QUOTE = "Ana sends report."
 
 def config(**values):
     with patch.dict("os.environ", {}, clear=True):
-        return Settings(_env_file=None, **({"LLM_API_KEY": "fake", "LLM_MODEL": "test-model"} | values))
+        return Settings(_env_file=None, **({"LLM_API_KEY": "fake", "LLM_MODEL": "test-model", "PROJECT_MEMORY_ENABLED": False} | values))
 
 
 def output(project_id=None, task=False):
@@ -81,6 +81,19 @@ class FakeSession:
             return next(c for c in self.chunks if c.id == params["id_1"])
         if model is ProcessingRunPart:
             return self.parts.get((params["source_chunk_id_1"], params["prompt_version_1"], params["model_1"]))
+        if model is ExtractionGeneration:
+            return next((row for row in reversed(self.rows) if isinstance(row, ExtractionGeneration)
+                and row.previous_run_id == params.get("previous_run_id_1")
+                and row.model == params["model_1"] and row.status in ("pending", "failed")), None)
+        if model is GenerationPart:
+            for row in reversed(self.rows):
+                if not isinstance(row, GenerationPart):
+                    continue
+                if "generation_id_1" in params and row.generation_id == params["generation_id_1"] and row.source_chunk_id == params["source_chunk_id_1"]:
+                    return row
+                if "base_part_id_1" in params and row.base_part_id == params["base_part_id_1"] and self.get(ExtractionGeneration, row.generation_id).status == "processed":
+                    return row
+            return None
         raise AssertionError(model)
 
     def scalars(self, statement):
@@ -99,6 +112,8 @@ class FakeSession:
 
     def execute(self, statement, *args):
         assert self.active
+        if hasattr(statement, "column_descriptions"):
+            return SimpleNamespace(scalars=lambda: SimpleNamespace(all=lambda: self.chunks))
         params = statement.compile(dialect=postgresql.dialect()).params
         if not any(c.chunk_version == params["chunk_version"] and c.chunk_index == params["chunk_index"] for c in self.chunks):
             values = dict(params)
@@ -138,6 +153,8 @@ class FakeClaude:
         payload = output(data["project_id"], bool(data["tasks"]))
         if payload["tasks"]:
             payload["tasks"][0]["candidate_ids"] = [item["candidate_id"] for item in data["tasks"]]
+        payload["dispositions"] = [{"candidate_id": item["candidate_id"], "status": "merged", "final_index": 0, "reason": None}
+            for kind in ("tasks", "decisions") for item in data[kind]]
         return ConsolidatedExtraction.model_validate(payload)
 
 
@@ -338,6 +355,8 @@ class HierarchicalTests(unittest.TestCase):
         final = dict(payload)
         final[kind] = [dict(item, candidate_ids=[data[kind][index]["candidate_id"]])
                        for index, item in enumerate(payload[kind])]
+        final["dispositions"] = [{"candidate_id": item["candidate_id"], "status": "kept", "final_index": index, "reason": None}
+            for index, item in enumerate(data[kind])]
         return session, data, candidates, final
 
     def test_consolidation_rejects_unknown_references_owner_date_and_evidence(self):
@@ -366,6 +385,7 @@ class HierarchicalTests(unittest.TestCase):
         second["provenance"][0]["char_end"] = 100 + len(QUOTE)
         candidates["tasks"][second_id] = second
         final["tasks"].append(dict(final["tasks"][0], candidate_ids=[second_id]))
+        final["dispositions"].append({"candidate_id": second_id, "status": "kept", "final_index": 1, "reason": None})
         result, provenance = validate_consolidation(ConsolidatedExtraction.model_validate(final),
                                                    candidates, session.source, session.projects)
         self.assertEqual(len(result.tasks), 2)

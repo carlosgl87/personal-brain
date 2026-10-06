@@ -14,6 +14,11 @@ class Chunk:
 
 
 def chunk_version(settings):
+    fingerprint = "|".join((str(settings.memory_chunk_size), str(settings.memory_chunk_overlap)))
+    return settings.memory_chunk_version + "-" + hashlib.sha256(fingerprint.encode()).hexdigest()[:16]
+
+
+def legacy_chunk_version(settings):
     fingerprint = "|".join((str(settings.memory_chunk_size), str(settings.memory_chunk_overlap),
                            settings.openrouter_embedding_model or "none",
                            str(settings.openrouter_embedding_dimensions)))

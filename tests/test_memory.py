@@ -24,7 +24,7 @@ from app.services.queries import Scope
 
 def settings(**values):
     with patch.dict("os.environ", {}, clear=True):
-        return Settings(_env_file=None, **values)
+        return Settings(_env_file=None, **({"PROJECT_MEMORY_ENABLED": False} | values))
 
 
 def embedding_settings():
@@ -62,11 +62,13 @@ class MemoryTests(unittest.TestCase):
             self.assertEqual(chunk_source(SimpleNamespace(source_type=kind, raw_content="text"), settings()), [])
         self.assertTrue(chunk_source(SimpleNamespace(source_type="audio_transcript", raw_content="text"), settings()))
 
-    def test_version_changes_with_algorithm_size_model_and_dimensions(self):
+    def test_logical_version_changes_only_with_chunking_configuration(self):
         baseline = chunk_version(settings())
-        for values in ({"MEMORY_CHUNK_VERSION": "v2"}, {"MEMORY_CHUNK_SIZE": 5000},
-                       {"OPENROUTER_EMBEDDING_MODEL": "other"}, {"OPENROUTER_EMBEDDING_DIMENSIONS": 3}):
+        for values in ({"MEMORY_CHUNK_VERSION": "v2"}, {"MEMORY_CHUNK_SIZE": 5000}, {"MEMORY_CHUNK_OVERLAP": 250}):
             self.assertNotEqual(baseline, chunk_version(settings(**values)))
+
+        for values in ({"OPENROUTER_EMBEDDING_MODEL": "other"}, {"OPENROUTER_EMBEDDING_DIMENSIONS": 3}):
+            self.assertEqual(baseline, chunk_version(settings(**values)))
 
     def test_mock_embeddings_restore_order_and_use_fixed_endpoint(self):
         client = MagicMock()
@@ -98,8 +100,8 @@ class MemoryTests(unittest.TestCase):
         session = MagicMock()
         source_id, chunk_id = uuid4(), uuid4()
         source = SimpleNamespace(source_type="manual_note", raw_content="complete original")
-        chunk = SimpleNamespace(content=source.raw_content, embedding=None)
-        session.scalar.side_effect = [source, chunk]
+        chunk = SimpleNamespace(id=chunk_id, content=source.raw_content, embedding=None)
+        session.scalar.side_effect = [source, chunk, None]
         session.scalars.return_value = [chunk_id]
         with patch("app.services.memory.embed_texts", side_effect=EmbeddingError("failure")):
             with self.assertRaises(EmbeddingError):
@@ -122,15 +124,18 @@ class MemoryTests(unittest.TestCase):
 
     def test_indexing_records_model_on_success_and_skips_concurrent_completion(self):
         session = MagicMock()
-        first = SimpleNamespace(content="a", embedding=None)
-        done = SimpleNamespace(content="b", embedding=[1, 0, 0])
-        session.scalar.side_effect = [SimpleNamespace(source_type="manual_note", raw_content="original"), first, done]
+        first = SimpleNamespace(id=uuid4(), content="a", embedding=None)
+        done = SimpleNamespace(id=uuid4(), content="b", embedding=[1, 0, 0])
+        session.scalar.side_effect = [SimpleNamespace(source_type="manual_note", raw_content="original"), first, None, done, uuid4()]
         session.scalars.return_value = [uuid4(), uuid4()]
         with patch("app.services.memory.embed_texts", return_value=[[1, 0, 0]]) as embed:
             result = index_source(session, uuid4(), embedding_settings())
         self.assertEqual(embed.call_count, 1)
-        self.assertEqual(first.embedding_model, "test/model")
-        self.assertEqual(first.embedding_dimensions, 3)
+        saved = session.add.call_args.args[0]
+        self.assertEqual(saved.model, "test/model")
+        self.assertEqual(saved.dimensions, 3)
+        self.assertIsNone(first.embedding)
+        self.assertEqual(list(done.embedding), [1, 0, 0])
         self.assertEqual(result["embedded"], 1)
 
     def test_search_sql_filters_current_sources_version_model_dimensions_and_scope(self):
@@ -138,7 +143,7 @@ class MemoryTests(unittest.TestCase):
         statement = semantic_statement([1, 0, 0], embedding_settings(), [project_id], "manual_note", now, now)
         compiled = statement.compile(dialect=postgresql.dialect())
         sql = str(compiled)
-        for value in ("<=>", "embedding_model =", "embedding_dimensions =", "chunk_version =",
+        for value in ("<=>", "chunk_embeddings.model =", "chunk_embeddings.dimensions =", "logical_version =",
                       "primary_project_id IN", "received_at >=", "received_at <=", "NOT (EXISTS"):
             self.assertIn(value, sql)
         self.assertIn("test/model", compiled.params.values())
@@ -177,7 +182,7 @@ class MemoryTests(unittest.TestCase):
         session.scalars.return_value = []
         backfill_candidates(session, embedding_settings(), 10)
         sql = str(session.scalars.call_args.args[0].compile(dialect=postgresql.dialect()))
-        self.assertIn("embedding IS NULL", sql)
+        self.assertIn("NOT (EXISTS (SELECT chunk_embeddings.id", sql)
         self.assertIn("LIMIT", sql)
         for limit in (0, 101):
             with self.assertRaises(MemoryError):

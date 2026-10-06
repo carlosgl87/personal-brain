@@ -1,9 +1,10 @@
 """Recuperación permitida, acotada y trazable; no interpreta SQL."""
 import hashlib
+import json
 from datetime import datetime, timezone
 from uuid import UUID, uuid4
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import selectinload
 
 from app.models import Area, Company, Decision, Project, ReasoningRun, Source, Task
@@ -13,13 +14,15 @@ from app.services.normalization import normalize
 from app.services.queries import Scope, current_derived, resolve_scope, scoped, source_statement, task_statement, decision_statement
 from app.services.reasoning_llm import PLANNER_VERSION, ReasoningError, plan_question, synthesize
 
+from app.services.project_memory_retrieval import retrieve_project_memories
 from app.services.retrieval_budget import bound_context, diverse_chunks, effective_limits
 
 
 def reasoning_question(text):
     raw = text.strip()
     if raw.startswith("/"):
-        name, _, question = raw.partition(" ")
+        parts = raw.split(maxsplit=1)
+        name, question = parts[0], parts[1] if len(parts) > 1 else ""
         if name.casefold().split("@")[0] in {"/ask", "/pregunta"}:
             return question.strip()
         return None
@@ -45,11 +48,29 @@ def plan_scope(session, plan):
 
 
 def date_filter(statement, column, plan):
+    if column is None:
+        return statement
     if plan.date_from:
         statement = statement.where(column >= plan.date_from)
     if plan.date_to:
         statement = statement.where(column <= plan.date_to)
     return statement
+
+
+def temporal_column(kind, basis):
+    if basis == "none":
+        return None
+    if basis == "source_date":
+        return Source.received_at
+    if basis == "created_date":
+        return {"tasks": Task.created_at, "decisions": Decision.created_at, "sources": Source.created_at}[kind]
+    if kind == "tasks" and basis in {"due_date", "mixed"}:
+        return Task.due_at
+    if kind == "decisions" and basis in {"decision_date", "mixed"}:
+        return func.coalesce(Decision.decided_at, Source.received_at) if basis == "mixed" else Decision.decided_at
+    if kind == "sources" and basis == "mixed":
+        return Source.received_at
+    return None
 
 
 def clipped(text, limit):
@@ -64,7 +85,15 @@ def retrieve(session, plan, settings):
     limits = effective_limits(plan)
     global_broad = scope.project_ids is None and plan.retrieval_depth == "broad"
     context = {"scope": scope.label, "tasks": [], "decisions": [], "recent_sources": [],
-               "chunks": [], "warnings": [], "projects": []}
+               "chunks": [], "warnings": [], "projects": [], "project_memories": [], "new_sources": []}
+    context["temporal_window"] = {"time_basis": plan.time_basis,
+        "date_from": plan.date_from.isoformat() if plan.date_from else None,
+        "date_to": plan.date_to.isoformat() if plan.date_to else None}
+    if plan.include_project_memory and not (plan.date_from or plan.date_to):
+        memories, deltas, warnings = retrieve_project_memories(session, scope, settings,
+            limit=30 if global_broad else {"focused": 1, "normal": 5, "broad": 15}[plan.retrieval_depth])
+        context["project_memories"], context["new_sources"] = memories, deltas
+        context["warnings"].extend(warnings)
     projects = session.scalars(scoped(select(Project), Project.id, scope).order_by(Project.name).limit(51)).all()
     context["projects"] = [{"id": str(p.id), "name": p.name, "catalog_status": p.status} for p in projects[:50]]
     if len(projects) > 50:
@@ -76,7 +105,7 @@ def retrieve(session, plan, settings):
             statement = scoped(statement, Task.project_id, scope)
         else:
             statement = task_statement(scope)
-        rows = session.execute(date_filter(statement, Task.due_at, plan).order_by(
+        rows = session.execute(date_filter(statement, temporal_column("tasks", plan.time_basis), plan).order_by(
             Task.due_at.asc().nulls_last(), Task.id).limit(limits["tasks"] + 1)).all()
         for task, name in rows[:limits["tasks"]]:
             context["tasks"].append({"task_id": str(task.id), "source_id": str(task.source_id) if task.source_id else None,
@@ -87,7 +116,7 @@ def retrieve(session, plan, settings):
         if len(rows) > limits["tasks"]:
             context["warnings"].append("El limite de tareas dejo cobertura parcial; hay más.")
     if plan.include_decisions:
-        statement = date_filter(decision_statement(scope), Decision.decided_at, plan)
+        statement = date_filter(decision_statement(scope), temporal_column("decisions", plan.time_basis), plan)
         rows = session.execute(statement.order_by(Decision.created_at.desc(), Decision.id).limit(limits["decisions"] + 1)).all()
         for decision, name in rows[:limits["decisions"]]:
             context["decisions"].append({"decision_id": str(decision.id), "source_id": str(decision.source_id) if decision.source_id else None,
@@ -97,7 +126,7 @@ def retrieve(session, plan, settings):
         if len(rows) > limits["decisions"]:
             context["warnings"].append("El limite de decisiones dejo cobertura parcial; hay más.")
     if plan.include_recent_sources:
-        statement = date_filter(source_statement(scope), Source.received_at, plan)
+        statement = date_filter(source_statement(scope), temporal_column("sources", plan.time_basis), plan)
         rows = session.execute(statement.order_by(Source.received_at.desc(), Source.id).limit(limits["recent_sources"] + 1)).all()
         for source, run in rows[:limits["recent_sources"]]:
             context["recent_sources"].append({"source_id": str(source.id), "received_at": source.received_at.isoformat(),
@@ -114,7 +143,9 @@ def retrieve(session, plan, settings):
             try:
                 for question in plan.semantic_queries:
                     for item in semantic_search(session, question, settings, project_ids=scope.project_ids,
-                                date_from=plan.date_from, date_to=plan.date_to,
+                                date_from=plan.date_from if plan.time_basis in {"source_date", "created_date", "mixed"} else None,
+                                date_to=plan.date_to if plan.time_basis in {"source_date", "created_date", "mixed"} else None,
+                                time_basis=plan.time_basis,
                                 limit=54 if global_broad else limits["chunks"], diversify=global_broad):
                         previous = found.get(item["chunk_id"])
                         if previous is None or item["distance"] < previous["distance"]:
@@ -136,7 +167,7 @@ def retrieve(session, plan, settings):
 
 
 def trace_context(context):
-    result = {key: value for key, value in context.items() if key not in {"chunks", "recent_sources", "tasks", "decisions"}}
+    result = {key: value for key, value in context.items() if key not in {"chunks", "recent_sources", "tasks", "decisions", "project_memories", "new_sources"}}
     for kind in ("tasks", "decisions"):
         result[kind] = []
         for item in context[kind]:
@@ -158,6 +189,16 @@ def trace_context(context):
                                  "excerpt_chars": len(s["excerpt"]["text"]),
                                  "excerpt_sha256": hashlib.sha256(s["excerpt"]["text"].encode()).hexdigest()}
                                 for s in context["recent_sources"]]
+    for kind in ("project_memories", "new_sources"):
+        result[kind] = []
+        for item in context.get(kind, []):
+            trace = {key: value for key, value in item.items() if key not in {"memory", "summary", "excerpt", "note", "current_task", "before", "after"}}
+            for key in ("memory", "summary", "excerpt", "note", "current_task", "before", "after"):
+                if key in item:
+                    value = json.dumps(item[key], ensure_ascii=False, sort_keys=True)
+                    trace[key + "_sha256"] = hashlib.sha256(value.encode()).hexdigest()
+                    trace[key + "_chars"] = len(value)
+            result[kind].append(trace)
     return result
 
 
@@ -179,7 +220,7 @@ def answer_reasoning(session, question, question_source_id, settings):
             now = datetime.now(timezone.utc)
             plan = plan_question(question, catalog_context(session), now, settings)
             context = retrieve(session, plan, settings)
-            if not any(context[k] for k in ("tasks", "decisions", "recent_sources", "chunks")):
+            if not any(context.get(k) for k in ("tasks", "decisions", "recent_sources", "chunks", "project_memories", "new_sources")):
                 answer = "No encontré evidencia suficiente en el alcance consultado. Puede haber fuentes todavía sin indexar."
             else:
                 answer = synthesize(question, context, settings)

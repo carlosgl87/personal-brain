@@ -1,7 +1,7 @@
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import Field, SecretStr
+from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy.engine import URL, make_url
 
@@ -33,12 +33,28 @@ class Settings(BaseSettings):
     hierarchical_consolidation_max_items: int = Field(default=300, ge=10, le=1000)
     hierarchical_consolidation_max_chars: int = Field(default=160000, ge=10000, le=300000)
     hierarchical_consolidation_max_tokens: int = Field(default=12000, ge=4096, le=24000)
+    project_memory_enabled: bool = True
+    project_memory_debounce_seconds: int = Field(default=300, ge=0, le=3600)
+    project_memory_max_chars: int = Field(default=12000, ge=1000, le=24000)
+    project_memory_incremental_max_sources: int = Field(default=20, ge=1, le=100)
+    project_memory_reconciliation_hour: int = Field(default=3, ge=0, le=23)
+    project_memory_timezone: str = "America/Lima"
     stt_language: str = "es"
     audio_max_bytes: int = Field(default=20 * 1024 * 1024, ge=1024, le=20 * 1024 * 1024)
     audio_max_seconds: int = Field(default=600, ge=1, le=600)
     llm_api_key: SecretStr | None = None
     llm_provider: str = "anthropic"
     llm_model: str | None = None
+
+    @field_validator("project_memory_timezone")
+    @classmethod
+    def valid_memory_timezone(cls, value):
+        from zoneinfo import ZoneInfo
+        try:
+            ZoneInfo(value)
+        except Exception:
+            raise ValueError("PROJECT_MEMORY_TIMEZONE debe ser una zona IANA valida.") from None
+        return value
 
     def telegram_credentials(self) -> tuple[str, int]:
         try:
@@ -50,7 +66,7 @@ class Settings(BaseSettings):
                 raise ValueError
             return token, user_id
         except Exception:
-            raise ValueError("Configura TELEGRAM_BOT_TOKEN y TELEGRAM_USER_ID vÃ¡lidos en .env.") from None
+            raise ValueError("Configura TELEGRAM_BOT_TOKEN y TELEGRAM_USER_ID validos en .env.") from None
 
     def llm_credentials(self) -> tuple[str, str]:
         if (self.llm_provider.casefold() != "anthropic" or self.llm_api_key is None

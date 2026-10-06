@@ -10,7 +10,7 @@ from app.models.decision import Decision
 from app.models.processing_run import ProcessingRun
 from app.models.audio_asset import AudioAsset
 
-__all__ = ["Base", "Area", "Category", "Company", "Project", "ProjectAlias", "Source", "Task", "Decision", "ProcessingRun", "AudioAsset", "TaskChange", "SourceChunk", "ReasoningRun", "ProcessingRunPart", "TaskEvidence", "DecisionEvidence"]
+__all__ = ["Base", "Area", "Category", "Company", "Project", "ProjectAlias", "Source", "Task", "Decision", "ProcessingRun", "AudioAsset", "TaskChange", "SourceChunk", "ReasoningRun", "ProcessingRunPart", "TaskEvidence", "DecisionEvidence", "ChunkEmbedding", "ExtractionGeneration", "GenerationPart", "ProjectMemoryVersion", "ProjectMemoryState", "ProjectMemoryEvent"]
 
 from app.models.task_change import TaskChange
 
@@ -18,3 +18,6 @@ from app.models.source_chunk import SourceChunk
 from app.models.reasoning_run import ReasoningRun
 
 from app.models.extraction_evidence import ProcessingRunPart, TaskEvidence, DecisionEvidence
+
+from app.models.vector_versions import ChunkEmbedding, ExtractionGeneration, GenerationPart
+from app.models.project_memory import ProjectMemoryVersion, ProjectMemoryState, ProjectMemoryEvent

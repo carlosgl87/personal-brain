@@ -8,6 +8,8 @@ class QueryPlan(StrictModel):
     semantic_queries: list[str] = Field(default_factory=list, max_length=3)
     scope_type: Literal["project", "company", "area", "global"] | None = None
     scope_value: str | None = Field(default=None, max_length=250)
+    include_project_memory: StrictBool = True
+    time_basis: Literal["source_date", "due_date", "decision_date", "created_date", "mixed", "none"] = "source_date"
     include_tasks: StrictBool = True
     include_decisions: StrictBool = True
     include_recent_sources: StrictBool = True

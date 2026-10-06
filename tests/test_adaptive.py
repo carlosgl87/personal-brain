@@ -15,7 +15,7 @@ from app.services.retrieval_budget import bound_context, diverse_chunks, effecti
 
 def settings(**values):
     with patch.dict("os.environ", {}, clear=True):
-        return Settings(_env_file=None, **values)
+        return Settings(_env_file=None, **({"PROJECT_MEMORY_ENABLED": False} | values))
 
 
 class AdaptiveTests(unittest.TestCase):
@@ -70,7 +70,7 @@ class AdaptiveTests(unittest.TestCase):
         sql = str(semantic_statement([1, 0, 0], config, diversify=True).compile(dialect=postgresql.dialect()))
         self.assertIn("row_number() OVER (PARTITION BY sources.primary_project_id", sql)
         self.assertIn("project_rank <=", sql)
-        self.assertIn("embedding_model =", sql)
+        self.assertIn("chunk_embeddings.model =", sql)
         self.assertIn("NOT (EXISTS", sql)
 
     def test_budget_keeps_structure_before_semantics_and_recents_without_mutating_original(self):

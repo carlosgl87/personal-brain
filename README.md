@@ -21,7 +21,7 @@ Si PowerShell bloquea la activación, puedes usar directamente ` .\.venv\Scripts
 
 Conserva tu archivo `.env` existente. Si comienzas desde un clon nuevo, copia `.env.example` a `.env` y completa sus variables localmente. **Nunca subas .env a Git**, ni imprimas sus valores. El Dockerfile tampoco lo incluye.
 
-La aplicación resuelve una sola conexión: `DATABASE_URL` si tiene valor; en caso contrario `DATABASE_PUBLIC_URL`. En tu laptop usa la conexión pública de Railway, dejando `DATABASE_URL` ausente o vacía. Dentro de Railway usa `DATABASE_URL` con la conexión interna. El driver utilizado es psycopg 3. Las credenciales de Telegram solo son necesarias al usar FASE 2. Las de LLM se utilizan solo al activar FASE 3.
+La aplicación resuelve una sola conexión: `DATABASE_URL` si tiene valor; en caso contrario `DATABASE_PUBLIC_URL`. En tu laptop usa la conexión pública de Railway, dejando `DATABASE_URL` ausente o vacía. Dentro de Railway usa `DATABASE_URL` con la conexión interna. El driver utilizado es psycopg 3. Las credenciales de Telegram son necesarias para consultar el catalogo por HTTP y para usar el bot. Las de LLM se utilizan solo al activar FASE 3.
 
 Ejecuta primero las pruebas sin DB y después la migración y el seed:
 
@@ -39,20 +39,22 @@ El seed usa claves estables y `ON CONFLICT DO NOTHING`, en una única transacci�
 
 ## Probar la API
 
-En otra terminal PowerShell:
+En otra terminal PowerShell. El catalogo requiere el mismo Bearer token que las rutas del bot. Si el token esta solo en `.env`, el siguiente ejemplo lo carga localmente sin imprimirlo:
 
 ```powershell
+$apiToken = python -c "from app.config import get_settings; print(get_settings().telegram_credentials()[0])"
+$headers = @{ Authorization = "Bearer $apiToken" }
 Invoke-RestMethod 'http://127.0.0.1:8000/health'
 Invoke-RestMethod 'http://127.0.0.1:8000/health/db'
-$projects = @(Invoke-RestMethod 'http://127.0.0.1:8000/projects' | ForEach-Object { $_ })
+$projects = @(Invoke-RestMethod 'http://127.0.0.1:8000/projects' -Headers $headers | ForEach-Object { $_ })
 $projects.Count
-Invoke-RestMethod 'http://127.0.0.1:8000/projects?area=Laureate'
-Invoke-RestMethod 'http://127.0.0.1:8000/projects?area=Laureate&category=Student%20Ecosystem'
-Invoke-RestMethod 'http://127.0.0.1:8000/projects?area=Consultora&company=Catusita'
-Invoke-RestMethod 'http://127.0.0.1:8000/projects?status=active'
+Invoke-RestMethod 'http://127.0.0.1:8000/projects?area=Laureate' -Headers $headers
+Invoke-RestMethod 'http://127.0.0.1:8000/projects?area=Laureate&category=Student%20Ecosystem' -Headers $headers
+Invoke-RestMethod 'http://127.0.0.1:8000/projects?area=Consultora&company=Catusita' -Headers $headers
+Invoke-RestMethod 'http://127.0.0.1:8000/projects?status=active' -Headers $headers
 $projectId = [guid]$projects[0].id
-Invoke-RestMethod ("http://127.0.0.1:8000/projects/" + $projectId)
-Invoke-RestMethod 'http://127.0.0.1:8000/projects?area=Personal'
+Invoke-RestMethod ("http://127.0.0.1:8000/projects/" + $projectId) -Headers $headers
+Invoke-RestMethod 'http://127.0.0.1:8000/projects?area=Personal' -Headers $headers
 git check-ignore .env
 git ls-files -- .env
 git status --short
@@ -515,7 +517,7 @@ Variables nuevas, con sus valores predeterminados:
 
 Se reutilizan `OPENROUTER_API_KEY` y `LLM_PROVIDER=anthropic`, `LLM_MODEL`, `LLM_API_KEY`. No necesitas una clave adicional. Para probar puedes seleccionar `OPENROUTER_EMBEDDING_MODEL=qwen/qwen3-embedding-4b` con dimensión 2560; consulta el [modelo en OpenRouter](https://openrouter.ai/qwen/qwen3-embedding-4b) y la [configuración oficial de Qwen](https://huggingface.co/Qwen/Qwen3-Embedding-4B/blob/main/config.json). No se carga el modelo en Railway ni en tu computadora.
 
-El servicio utiliza la [API de embeddings de OpenRouter](https://openrouter.ai/docs/api/api-reference/embeddings/submit-an-embedding-request). Envía el texto de cada chunk y, en las búsquedas, el texto de la consulta; no envía metadata de Telegram ni credenciales dentro del contenido. Espera la dimensión nativa del modelo, sin solicitar reducción de dimensiones. Modelos y dimensiones diferentes nunca se mezclan en una búsqueda. Cambiar modelo, dimensión, tamaño u overlap produce otra versión y conserva los chunks anteriores.
+El servicio utiliza la [API de embeddings de OpenRouter](https://openrouter.ai/docs/api/api-reference/embeddings/submit-an-embedding-request). Envía el texto de cada chunk y, en las búsquedas, el texto de la consulta; no envía metadata de Telegram ni credenciales dentro del contenido. Espera la dimensión nativa del modelo, sin solicitar reducción de dimensiones. Modelos y dimensiones diferentes nunca se mezclan en una búsqueda. Cambiar el modelo o la dimensión genera otra versión de embedding sobre los mismos chunks. Solo cambiar el algoritmo, tamaño u overlap cambia los chunks lógicos; los anteriores permanecen.
 
 Reinicia la API tras cambiar configuración. Deja `MEMORY_AUTO_INDEX=false` mientras pruebas de forma manual. Activarlo no procesa el histórico: solo nuevas notas y transcripciones que pasan por el endpoint de procesamiento. Las llamadas a embeddings y Claude consumen saldo de sus proveedores.
 
@@ -594,7 +596,7 @@ Para global + broad, cada consulta semántica obtiene hasta 54 candidatos, con h
 
 `REASONING_CONTEXT_MAX_CHARS` limita los caracteres del JSON de evidencia enviado a la síntesis, incluyendo metadata y warnings, sin contar pregunta y system prompt. Primero se admiten tareas y decisiones; luego chunks, notas recientes y catálogo. Los elementos que no caben se omiten del contexto, con advertencia explícita de cobertura parcial; los originales no cambian. Un chunk grande puede omitirse mientras otro más pequeño todavía cabe.
 
-`reasoning_runs.plan` guarda la profundidad. `retrieved_context.retrieval` registra límites efectivos, cantidades antes/después del presupuesto, caracteres usados, presupuesto y si hubo reducción. La trace guarda IDs, fechas, estado, modelo/versión, distancias y hashes; no copia textos extensos de tareas, decisiones, chunks o transcripciones. Cambia la versión del planner a `memory-planner-v2-adaptive`.
+`reasoning_runs.plan` guarda la profundidad. `retrieved_context.retrieval` registra límites efectivos, cantidades antes/después del presupuesto, caracteres usados, presupuesto y si hubo reducción. La trace guarda IDs, fechas, estado, modelo/versión, distancias y hashes; no copia textos extensos de tareas, decisiones, chunks o transcripciones. La versión vigente del planner es `memory-planner-v3-project-memory`.
 
 ### Hierarchical extraction
 
@@ -615,7 +617,7 @@ Las tablas nuevas tienen constraints e índices. Sus filas son inmutables median
 
 La idempotencia de parciales usa fuente + chunk + versión + prompt + modelo. Reintentar reutiliza parciales confirmados; cambiar modelo, prompt o versión de chunks produce otros parciales y conserva los anteriores. Si falla el chunk N, los anteriores permanecen. Si falla la consolidación, todos los parciales permanecen. Una extracción final confirmada se reutiliza sin nuevas llamadas, salvo reprocesamiento explícito.
 
-El consolidator elimina duplicados claros de overlap. La aplicación valida referencias de candidatos, citas y responsables/fechas fundamentados, conserva evidencias de todos los chunks y fusiona duplicados idénticos con offsets coincidentes. Hechos en posiciones distintas no se fusionan automáticamente solo por tener títulos iguales. Una consolidación que omite candidatos comprometidos se rechaza para reintentar en lugar de perderlos silenciosamente.
+El consolidator elimina duplicados claros de overlap. La aplicación valida referencias de candidatos, citas y responsables/fechas fundamentados, conserva evidencias de todos los chunks y fusiona duplicados idénticos con offsets coincidentes. Hechos en posiciones distintas no se fusionan automáticamente solo por tener títulos iguales. La consolidación exige evaluar todos los candidatos mediante dispositions: kept, merged o rejected con motivo. Omitir una evaluación se rechaza; un candidato rechazado queda trazado sin crear un item final.
 
 Se respeta primary_project_id existente. Una propuesta nueva necesita catálogo y coincidencia inequívoca en el original; ante ambigüedad queda null. La consolidación distingue compromisos y acuerdos de ideas, dudas e hipótesis. El resumen global debe cubrir temas, cambios, problemas, acuerdos, próximos pasos y puntos abiertos cuando haya evidencia.
 
@@ -685,3 +687,228 @@ La extracción es síncrona y secuencial, sin cola ni scheduler; una reunión la
 No hay consolidación por múltiples niveles si los parciales exceden los límites: la ejecución se detiene explícitamente para ajustar el tratamiento. La evidencia textual se valida de forma determinística; la calidad de resúmenes e inferencias todavía depende de Claude y necesita evaluación con reuniones reales.
 
 Las pruebas incluyen fallos por chunk, reanudación, consolidación, evidencias de tareas/decisiones, overlap, proyectos ambiguos, reuniones largas, audio y presupuestos adaptativos. Usan mocks y repositorios transaccionales en memoria; la migración se compila offline. Esta evolución queda local hasta confirmar migración, push y despliegue; no utiliza la autorización del despliegue anterior.
+
+## Evolución final: contexto vivo por proyecto
+
+Esta fase agrega semántica temporal, embeddings separados, generaciones explícitas, rechazo trazable de candidatos y Project Memory. Conserva PostgreSQL, SQL controlado, fuentes originales, chunks, extracción y consultas existentes. No cambia el texto ni metadata originales. No agrega frameworks de agentes ni servicios externos adicionales. Esta implementación queda local: no implica push, despliegue, migración de Railway ni llamadas pagadas de validación.
+
+### Fechas de las preguntas
+
+`QueryPlan.time_basis` admite `source_date`, `due_date`, `decision_date`, `created_date`, `mixed`, `none`. La aplicación elige columnas SQL; Claude solo selecciona una opción validada.
+
+| Intención | Base temporal | Campo |
+|---|---|---|
+| Qué compromisos asumí / qué pasó esta semana | source_date | Source.received_at |
+| Qué vence / pendientes para esta semana | due_date | Task.due_at |
+| Cuándo se registró técnicamente | created_date | Task/Decision/Source.created_at |
+| Fecha explícita de un acuerdo | decision_date | Decision.decided_at |
+| Eventos combinados | mixed | Tareas: due_at; decisiones: coalesce(decided_at, source.received_at); fuentes: received_at |
+| Sin ventana | none | Sin filtro de fechas |
+
+Una tarea recibida esta semana con vencimiento próximo mes aparece en compromisos asumidos; una tarea antigua que vence esta semana aparece en vencimientos. Una decisión sin decided_at aparece con source_date. En due_date no se filtran decisiones por un vencimiento inexistente; el planner debe excluir clases ajenas a la intención. La recepción de una transcripción no garantiza la fecha real de la reunión: si el texto no informa la fecha, se conserva esa incertidumbre. Las ventanas tienen zona explícita de America/Lima. Una consulta con ventana temporal usa SQL/fuentes/chunks filtrados, sin introducir la memoria actual como si fuera historia del período.
+
+### Chunks, embeddings y generaciones
+
+`chunk_version` depende de algoritmo, tamaño y overlap. `chunk_embeddings` conserva múltiples vectores por chunk, separados por provider/model/dimensions. La búsqueda compara exclusivamente el modelo y dimensiones configurados. Cambiar embeddings no cambia texto, offsets ni identidad de chunks y no invalida parciales de Claude.
+
+Los chunks históricos que antes incluían el modelo en su versión conservan sus IDs y versión física. Al reutilizarlos se añade `logical_version` cuando contenido, índices y offsets coinciden exactamente. Esto permite mantener las referencias y reutilizar parciales anteriores. Las columnas de embedding antiguas permanecen; la migración copia localmente los vectores conocidos a la tabla nueva, sin red ni pago. Seleccionar otro modelo requiere indexación explícita o el mecanismo auto-index ya configurado; no hay backfill automático de todo el historial.
+
+```powershell
+python -m app.process --source-id UUID --reprocess
+python -m app.process --source-id UUID --reprocess --refresh-parts
+```
+
+Para fuentes largas, `--reprocess` reutiliza parciales compatibles y paga la nueva consolidación. Si faltan parciales compatibles por cambio del modelo/prompt/segmentación, solo se extraen los faltantes. `--refresh-parts` requiere `--reprocess` y un UUID explícito; solicita nuevas llamadas por chunk y después consolida. Para fuentes cortas sigue existiendo una sola llamada directa: no hay parciales que refrescar. Se mantiene el bloqueo de reprocesamiento cuando hay tareas editadas manualmente.
+
+`extraction_generations` identifica cada refresh, su ejecución anterior y estado pending/failed/processed; `extraction_generation_parts` conserva los resultados nuevos y su vínculo con el parcial base. Los parciales existentes permanecen inmutables. Un refresh fallido se reanuda con la misma generación y no repite parciales ya confirmados. Después de publicarla, la reconsolidación económica reutiliza esa generación publicada. Las evidencias finales guardan también generation_part_id. La extracción previa sigue vigente si falla la nueva.
+
+Cada candidato debe figurar exactamente una vez en `candidate_dispositions` del ProcessingRun final. kept y merged apuntan al índice del item final de su tipo; rejected exige motivo y no crea task/decision. Se validan todos los IDs, citas exactas, responsables, fechas y cobertura. La deduplicación de overlap mantiene evidencias y ajusta los índices de disposition al resultado definitivo. Los candidatos rechazados siguen disponibles en los parciales.
+
+### Project Memory y worker
+
+`project_memory_versions` conserva versiones inmutables con memoria JSON de 12 secciones, referencias originales por sección, versión anterior, fuentes usadas, cursor, proveedor/modelo y prompt. Secciones: executive_summary, objective, current_state, recent_progress, open_items, risks_and_blockers, key_decisions, recently_completed, key_people, important_facts, open_questions y recent_changes. Secciones sin evidencia quedan vacías; no se fabrican memorias para los 32 proyectos al migrar.
+
+`project_memory_state` mantiene el puntero vigente y scheduling. `project_memory_events` registra cambios inmutables en la misma transacción que la extracción o edición. Un contador por proyecto, serializado con bloqueo de fila, evita perder cambios concurrentes. `through_revision` identifica exactamente el cursor consumido; consolidated_through_at conserva el timestamp asociado, pero el cursor de eventos gobierna la actualización, incluso con timestamps iguales o fechas de recepción antiguas.
+
+Una extracción exitosa marca dirty; completar, reabrir, cambiar fecha/responsable o mover una tarea también. Moverla marca el proyecto anterior y el nuevo. La memoria del destino recibe el cambio y la tarea vigente con sus referencias; no incorpora reuniones completas de otro proyecto solo porque esa tarea provenga de ellas. Cada cambio mueve refresh_after al último cambio + 300 segundos. Un update repetido no genera otro evento. Una ráfaga cercana se procesa en un batch; si supera el límite, el cursor avanza solo hasta los eventos consumidos y queda trabajo pendiente para el siguiente batch.
+
+El worker consulta únicamente proyectos pendientes o elegibles para reconciliación y usa un advisory lock por proyecto con conexión dedicada. No sostiene el bloqueo de estado mientras llama a Claude. Antes de publicar verifica el puntero y la conexión de propiedad; si llegan cambios mientras genera, preserva sus eventos y debounce. Dos workers no generan una actualización simultánea del mismo proyecto. La publicación de versión y puntero es atómica.
+
+La actualización incremental envía memoria previa + fuentes de los eventos nuevos + SQL vigente de tareas, incluidas completadas, y decisiones + cambios manuales. La evidencia es acotada: como máximo 20 eventos/fuentes por batch, 60 tareas y 40 decisiones. El límite de eventos incluye cambios de tarea/refresh, no solo fuentes distintas. Fuentes largas usan resumen y extracto con marca de truncamiento; sus originales y chunks siguen disponibles. Un batch incremental cuyo contexto excede el presupuesto se rechaza sin adelantar el cursor; reduce el batch antes de reintentar. No se trunca la salida de Project Memory: se rechaza si supera MAX_CHARS o tiene referencias inválidas.
+
+Alrededor de las 03:00 America/Lima se reconcilian proyectos cambiados desde la última reconciliación: memoria anterior, evidencia reciente, SQL actual y hasta 8 chunks semánticos históricos si están disponibles. No se recorre el archivo completo. Cambios llegados después de la hora nocturna siguen el debounce normal y quedan para la noche siguiente. Proyectos sin cambios no llaman a Claude. Un fallo por proyecto registra un mensaje seguro y aplica 60 segundos de espera antes de reintentar.
+
+`app.cloud` inicia FastAPI, el receptor Telegram y el worker dentro del mismo contenedor. El worker inicia al obtener el turno del bot; si termina, se reinicia tras 30 segundos y Telegram sigue activo. Una actualización fallida no termina el worker ni los otros procesos. El apagado del supervisor detiene sus hijos. La extracción jerárquica continúa síncrona; la nueva consolidación de memoria se realiza fuera del request Telegram.
+
+### Consultas, refresh y costos
+
+El planner puede incluir Project Memory para estado general y panorama. Reasoning combina memoria + delta posterior a through_revision + SQL + semantic retrieval y fuentes recientes. Durante el debounce incorpora fuentes nuevas y, para comandos de tareas, before/after y estado SQL actual: una tarea completada no depende de que la memoria antigua siga diciendo pendiente. Las consultas globales recuperan memorias compactas de varios proyectos. En el presupuesto, los deltas se incorporan antes de la memoria; si no cabe el delta de una memoria dirty, se omite esa memoria vieja para evitar responder solo con ella; los límites y la reducción se reportan. Las referencias de la síntesis deben pertenecer a fuentes recuperadas o secciones de memoria usadas. La trace registra versiones, referencias, cantidades y hashes, sin copiar cuerpos completos.
+
+Si no existe memoria, está deshabilitada o falla el worker, siguen disponibles SQL, notas recientes y chunks. Las preguntas específicas pueden recuperar originales semánticos; Project Memory no sustituye historia ni `/pendientes`. La calidad de la resolución de contradicciones sigue dependiendo de Claude: reemplaza estado cuando hay evidencia clara, y conserva incertidumbre cuando falta. SQL sigue siendo la lista exacta de tareas.
+
+```text
+/refrescar SIMA
+/refresh CIMA
+```
+
+Estos comandos solo guardan y encolan la solicitud, sin trabajo pesado dentro de Telegram. CIMA necesita existir como alias inequívoco de SIMA. El worker genera una versión sin esperar el debounce ordinario. Por CLI:
+
+```powershell
+python -m app.project_memory refresh --project SIMA
+python -m app.project_memory rebuild --project SIMA
+python -m app.project_memory_worker --once
+python -m app.project_memory_worker
+```
+
+`refresh` ejecuta un incremental explícito; `rebuild` ejecuta una reconciliación acotada y conserva versiones anteriores. `--once` atiende trabajo que ya venció, no fuerza proyectos ni espera cinco minutos. Estos comandos pueden llamar a proveedores. Si una actualización queda pendiente por error/lock/evidencia insuficiente, el CLI lo indica; no garantiza que se haya generado una versión.
+
+| Variable nueva | Default |
+|---|---|
+| PROJECT_MEMORY_ENABLED | true |
+| PROJECT_MEMORY_DEBOUNCE_SECONDS | 300 |
+| PROJECT_MEMORY_MAX_CHARS | 12000 |
+| PROJECT_MEMORY_INCREMENTAL_MAX_SOURCES | 20 |
+| PROJECT_MEMORY_RECONCILIATION_HOUR | 3 |
+| PROJECT_MEMORY_TIMEZONE | America/Lima |
+
+Se reutilizan las claves existentes. Cada actualización con evidencia cuesta una llamada a Claude; reconciliar puede añadir una consulta de embeddings. El debounce agrupa cambios. Deshabilitar PROJECT_MEMORY_ENABLED evita scheduling y llamadas del worker. No se hacen llamadas para proyectos sin cambios/evidencia, salvo refresh manual con evidencia existente. Un fallo externo después de cobrar pero antes de confirmar puede repetir el costo al reintentar; no hay garantía de exactly-once de proveedores. MAX_CHARS y los presupuestos limitan tamaño, no garantizan calidad ni tarifa fija.
+### Migraciones y prueba local con CIMA
+
+Archivos principales: `app/services/project_memory*.py`, `app/schemas/project_memory.py`, `app/models/project_memory.py`, `app/project_memory.py`, `app/project_memory_worker.py`, `app/cloud.py`; además planner/reasoning, chunking/memory, hierarchical, processing, task_management, Telegram y sus schemas/modelos. Configuración de ejemplo en `.env.example`.
+
+Migraciones nuevas, sin modificar 0001–0007:
+
+- **0008_vector_generations**: logical_version, chunk_embeddings con copia SQL local de vectores existentes, generaciones/parciales nuevos y generation_part_id en evidencias. Conserva columnas, vectores e IDs antiguos.
+- **0009_project_memory**: versiones, estado y eventos; índices, referencias, unicidad e inmutabilidad de historia. No crea memorias ni llama a proveedores.
+
+Ambas tienen downgrade destructivo deshabilitado. Las pruebas compilan el SQL offline; no sustituyen una ejecución contra PostgreSQL real con pgvector. No se ejecutaron migraciones de esta fase contra la base existente. Para comprobarlas usa una base de prueba aislada y una copia representativa si necesitas validar datos previos.
+
+1. En PowerShell, con la venv activa, ejecuta las pruebas sin proveedores ni configuración real:
+
+```powershell
+python -B -m unittest discover -s tests -v
+python -m pip check
+git diff --check
+```
+
+2. Prepara una base local de PostgreSQL con pgvector disponible. En el cliente SQL de esa instancia crea una base nueva:
+
+```sql
+CREATE DATABASE personal_brain_test;
+```
+
+En **cada terminal de prueba**, establece una conexión a esa base; reemplaza usuario/clave por los de tu PostgreSQL local. No uses una URL de Railway. Las variables de una terminal no se comparten con otras; si abres otra, repite este bloque. Estas variables de proceso tienen prioridad sobre `.env` y no modifican el archivo.
+
+```powershell
+$env:DATABASE_URL = 'postgresql://postgres:TU_CLAVE@127.0.0.1:5432/personal_brain_test'
+$env:PROJECT_MEMORY_ENABLED = 'true'
+$env:PROJECT_MEMORY_DEBOUNCE_SECONDS = '300'
+$env:MEMORY_AUTO_INDEX = 'false'
+alembic upgrade head
+python -m app.seed
+alembic current
+```
+
+El último comando debe mostrar `0009_project_memory`. Seed se solicita solamente para esta base nueva de prueba, no para producción. Las claves LLM/OpenRouter pueden seguir en tu `.env` privado; no las imprimas.
+
+3. Solo cuando quieras consumir APIs con el archivo real, sustituye la ruta por tu archivo CIMA UTF-8 `.txt` o `.md`:
+
+```powershell
+python -m app.ingest --file 'C:\ruta\reunion_cima.txt' --type meeting_transcript --project SIMA --process
+```
+
+Este comando guarda el archivo original completo, crea chunks, solicita embeddings si hay un modelo configurado y procesa con Claude. **La ingesta explícita indexa aunque MEMORY_AUTO_INDEX=false**; ese flag controla solamente el auto-index de capturas Telegram. Revisa el UUID impreso después de “Fuente completa guardada”. En esta base nueva puedes probar reanudación/reconsolidación y refresh pagado sobre ese UUID:
+
+```powershell
+$sourceId = 'PEGA_AQUI_EL_UUID_DE_LA_FUENTE'
+python -m app.process --source-id $sourceId
+python -m app.process --source-id $sourceId --reprocess
+python -m app.process --source-id $sourceId --reprocess --refresh-parts
+```
+
+Sin cambios, la primera reutiliza la extracción final; la segunda reutiliza parciales y paga consolidación; la tercera genera parciales nuevos y paga consolidación. No necesitas ejecutar las tres para validar una ingesta normal. El archivo CIMA debe asociarse a SIMA si ese es el proyecto del catálogo. Revisa manualmente resumen, compromisos, rechazos y provenance: un resultado técnicamente válido puede contener errores de interpretación.
+
+4. Para validar el debounce, ejecuta el worker en una terminal con el mismo DATABASE_URL de prueba y claves privadas:
+
+```powershell
+python -m app.project_memory_worker
+```
+
+Tras procesar una fuente verás “Project memory scheduled”. Varias notas procesadas del mismo proyecto dentro de cinco minutos deben mover refresh_after y producir una sola actualización, salvo que excedan el tamaño del batch. Tras el último cambio + cinco minutos, el worker debe registrar “Project memory refreshed”. Revisa el estado con esta consulta de solo lectura desde esa misma terminal/base:
+
+```powershell
+@'
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+from app.database import get_engine
+from app.models import Project, ProjectMemoryState, ProjectMemoryVersion
+with Session(get_engine()) as db:
+    rows = db.execute(select(Project.name, ProjectMemoryState, ProjectMemoryVersion)
+        .join(ProjectMemoryState, ProjectMemoryState.project_id == Project.id)
+        .outerjoin(ProjectMemoryVersion, ProjectMemoryVersion.id == ProjectMemoryState.current_version_id)
+        .where(Project.name == 'SIMA')).all()
+    for name, state, version in rows:
+        print(name, 'dirty=', state.is_dirty, 'refresh_after=', state.refresh_after,
+              'revision=', state.change_revision, 'retry_after=', state.retry_after)
+        if version:
+            print('version=', version.version_number, 'cursor=', version.through_revision,
+                  'previous=', version.previous_version_id, 'type=', version.update_type)
+            print('estado=', version.memory['current_state'])
+'@ | python -B -
+```
+
+Después de éxito sin cambios posteriores: dirty=False, cursor=revision, refresh_after=None; la sección muestra texto y source_ids. Si no hay filas, el proyecto aún no recibió eventos/refresh en esta base. Para inspeccionar historia, consulta project_memory_versions por project_id ordenada por version_number y comprueba que las versiones anteriores siguen presentes.
+
+5. Para una prueba inmediata puedes ejecutar, sin esperar el debounce:
+
+```powershell
+python -m app.project_memory refresh --project SIMA
+python -m app.project_memory rebuild --project SIMA
+```
+
+Ambos consumen Claude si hay evidencia; rebuild puede consultar embeddings. Cada éxito debe crear otra versión y conservar previous_version_id. Para validar ejecución única del worker usa `python -m app.project_memory_worker --once` cuando el deadline ya haya vencido. Ejecutar dos workers sobre un mismo proyecto debe permitir publicar solo a quien obtiene el advisory lock. Proyectos sin datos no deben producir contenido artificial ni llamadas pagadas. Para la reconciliación nocturna, deja el worker activo hasta la siguiente hora configurada y comprueba update_type=reconciliation solo en proyectos cambiados; las pruebas automatizadas cubren horarios simulados sin esperar una noche.
+
+6. Para Telegram local utiliza preferiblemente un bot de prueba distinto del bot productivo, con su token en una variable privada y el usuario autorizado. No ejecutes dos receptores del mismo bot. Inicia el supervisor desde una terminal con la conexión de prueba:
+
+```powershell
+python -m app.cloud
+```
+
+El supervisor arranca API, receptor y worker; no ejecuta Alembic por sí mismo. Detén el worker independiente si lo usaste antes, para simplificar la observación. No se ha detenido ni cambiado el bot de Railway durante esta fase.
+
+En Telegram prueba:
+
+```text
+/ask ¿Cómo está SIMA?
+/ask ¿Qué compromisos asumí esta semana en SIMA?
+/ask ¿Qué vence esta semana en SIMA?
+/ask ¿Qué decisiones tomamos esta semana en SIMA?
+/ask Dame un panorama global de los proyectos.
+/pendientes SIMA
+/refrescar SIMA
+```
+
+Después de una nueva nota y antes de cinco minutos, pregunta por el nuevo dato: la respuesta debe combinar memoria previa y fuente nueva. Completa una tarea usando `/completar UUID` y consulta inmediatamente: el delta debe reflejar la finalización aunque aún no haya nueva versión. Mueve una tarea con `/proyecto UUID AI Tutor` y comprueba dirty en ambos proyectos. Verifica que `/pendientes` continúa siendo exacto y determinístico. Las preguntas de detalle deben poder citar fuentes/chunks originales.
+
+Para validar un fallo del worker, las pruebas automatizadas simulan caída/reinicio y errores de actualización sin afectar Telegram ni revelar contenido/claves. No hace falta provocar fallos en producción. Logs permitidos: scheduled/refreshed/reconciliation completed/refresh failed con project_id; nunca prompts ni respuestas completas. Reintentos conservan la memoria previa y mantienen dirty.
+
+Esta fase termina aquí. No incluye push, despliegue, migración productiva, backfill del archivo existente ni validación pagada real; los comandos con proveedores anteriores quedan para tu prueba explícita.
+Si deshabilitas PROJECT_MEMORY_ENABLED, tampoco se registran eventos nuevos de esa función. Al reactivarla, solicita `rebuild --project SIMA` para cada proyecto que cambió durante el período deshabilitado, y revisa el resultado acotado. Las fuentes y los estados SQL permanecen, pero ese período no tiene un cursor incremental de Project Memory.
+
+## Revision de produccion
+
+Los hallazgos, correcciones y limites de la validacion estan en [docs/production-review.md](docs/production-review.md).
+Las dependencias de runtime se fijan en `constraints.txt`; Docker y pip usan las mismas versiones. Actualizalas deliberadamente y vuelve a ejecutar las pruebas.
+`/health/db` comprueba conexion y que Alembic este en la revision requerida por este codigo. `/projects` y `/projects/{id}` requieren `Authorization: Bearer <token del bot>`.
+Una edicion de Telegram que reemplazaria tareas modificadas manualmente se bloquea para conservar esos cambios. Guarda la correccion como una nota nueva.
+Los errores temporales de Telegram, incluidos 429 y fallos de red, se reintentan conservando el offset. Credenciales invalidas, polling duplicado y webhook activo detienen el receptor.
+
+Las pruebas SQL son optativas y escriben solo en una base desechable local ya migrada. No uses una copia que quieras conservar:
+
+```powershell
+$env:PERSONAL_BRAIN_TEST_DATABASE_URL = 'postgresql+psycopg://usuario:clave@127.0.0.1:5432/personal_brain_test_audit'
+python -B -m unittest discover -s tests -v
+Remove-Item Env:PERSONAL_BRAIN_TEST_DATABASE_URL
+```
+
+Las pruebas habituales sin esa variable omiten las pruebas SQL; no cargan `.env` ni consumen APIs.

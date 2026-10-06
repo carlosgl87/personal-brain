@@ -23,6 +23,7 @@ class ProcessingRunPart(Identity, Base):
 
 
 class EvidenceFields:
+    generation_part_id: Mapped[UUID | None] = mapped_column(ForeignKey("extraction_generation_parts.id"))
     source_chunk_id: Mapped[UUID] = mapped_column(ForeignKey("source_chunks.id"), index=True)
     processing_run_part_id: Mapped[UUID] = mapped_column(ForeignKey("processing_run_parts.id"))
     evidence: Mapped[str] = mapped_column(Text)

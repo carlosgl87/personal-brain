@@ -35,7 +35,7 @@ def output(project_id=None):
 class ProcessingTests(unittest.TestCase):
     def setUp(self):
         with patch.dict("os.environ", {}, clear=True):
-            self.settings = Settings(_env_file=None, LLM_API_KEY="fake-test-key",
+            self.settings = Settings(_env_file=None, PROJECT_MEMORY_ENABLED=False, LLM_API_KEY="fake-test-key",
                                      LLM_MODEL="test-model", TELEGRAM_BOT_TOKEN="fake-bot",
                                      TELEGRAM_USER_ID="12345")
         self.source = SimpleNamespace(

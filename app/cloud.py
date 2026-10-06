@@ -17,12 +17,15 @@ from app.database import get_engine
 def stop_child(child):
     if child is None or child.poll() is not None:
         return
-    child.terminate()
     try:
-        child.wait(timeout=15)
-    except subprocess.TimeoutExpired:
-        child.kill()
-        child.wait(timeout=5)
+        child.terminate()
+        try:
+            child.wait(timeout=15)
+        except subprocess.TimeoutExpired:
+            child.kill()
+            child.wait(timeout=5)
+    except ProcessLookupError:
+        pass
 
 
 def wait_api(port, child, stop, timeout=120):
@@ -41,7 +44,8 @@ def wait_api(port, child, stop, timeout=120):
 
 
 def supervise(port, stop):
-    api = bot = connection = None
+    api = bot = memory_worker = connection = None
+    worker_restart_after = 0
     lock_id = None
     locked = False
     try:
@@ -83,20 +87,36 @@ def supervise(port, stop):
                 if bot.poll() is not None:
                     print("El receptor se detuvo; se reiniciará el servicio.", flush=True)
                     return 1
+            if locked and settings.project_memory_enabled is True:
+                if memory_worker is not None and memory_worker.poll() is not None:
+                    print("Project Memory worker detenido; Telegram sigue activo. Reintento en 30 segundos.", flush=True)
+                    memory_worker = None
+                    worker_restart_after = time.monotonic() + 30
+                if memory_worker is None and time.monotonic() >= worker_restart_after:
+                    try:
+                        memory_worker = subprocess.Popen([sys.executable, "-m", "app.project_memory_worker"])
+                        print("Project Memory worker iniciado.", flush=True)
+                    except Exception:
+                        worker_restart_after = time.monotonic() + 30
+                        print("Project Memory worker no pudo iniciar; Telegram sigue activo.", flush=True)
             stop.wait(2)
         return 0
     except Exception:
         print("No se completó el arranque. Revisa variables, base de datos y migraciones; detalles sensibles omitidos.", flush=True)
         return 1
     finally:
-        stop_child(bot)
-        stop_child(api)
+        # Stop polling before releasing ownership, even if another child fails to stop.
+        for child in (bot, memory_worker, api):
+            try:
+                stop_child(child)
+            except Exception:
+                print("No se completo el cierre de un proceso hijo; detalles omitidos.", flush=True)
         if connection is not None:
             try:
                 if locked:
                     connection.scalar(text("SELECT pg_advisory_unlock(:lock_id)"), {"lock_id": lock_id})
             except Exception:
-                pass
+                connection.invalidate()
             connection.close()
 
 

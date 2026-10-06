@@ -14,6 +14,7 @@ class SourceChunk(Identity, Base):
         CheckConstraint("embedding IS NULL OR (embedding_dimensions IS NOT NULL AND vector_dims(embedding) = embedding_dimensions)", name="embedding_dimensions"),
     )
     source_id: Mapped[UUID] = mapped_column(ForeignKey("sources.id"), index=True)
+    logical_version: Mapped[str | None] = mapped_column(String(120), index=True)
     chunk_version: Mapped[str] = mapped_column(String(120))
     chunk_index: Mapped[int] = mapped_column(Integer)
     content: Mapped[str] = mapped_column(Text)
