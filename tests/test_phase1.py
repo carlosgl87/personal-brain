@@ -55,9 +55,9 @@ class PhaseOneTests(unittest.TestCase):
     def test_seed_exact_inventory(self):
         data = json.loads(Path("app/seed_data.json").read_text(encoding="utf-8"))
         self.assertEqual(data["areas"], ["Laureate", "Consultora"])
-        self.assertEqual(len(data["projects"]), 32)
-        self.assertEqual(sum(len(p["aliases"]) for p in data["projects"]), 83)
-        self.assertEqual(sum(p["area"] == "Laureate" for p in data["projects"]), 26)
+        self.assertEqual(len(data["projects"]), 34)
+        self.assertEqual(sum(len(p["aliases"]) for p in data["projects"]), 114)
+        self.assertEqual(sum(p["area"] == "Laureate" for p in data["projects"]), 27)
         self.assertEqual(sum(p.get("company") == "Catusita" for p in data["projects"]), 3)
         keys = [(p["area"], p["slug"]) for p in data["projects"]]
         self.assertEqual(len(keys), len(set(keys)))
@@ -70,9 +70,13 @@ class PhaseOneTests(unittest.TestCase):
         with patch("app.seed.ensure", side_effect=fake_ensure):
             seed(MagicMock())
             count = len(rows)
+            original_ids = {key: row.id for key, row in rows.items()}
             seed(MagicMock())
+            self.assertEqual({key: row.id for key, row in rows.items()}, original_ids)
+            self.assertEqual(sum(key[0] == "projects" for key in rows), 34)
+            self.assertEqual(sum(key[0] == "project_aliases" for key in rows), 114)
             self.assertEqual(len(rows), count)
-            self.assertEqual(count, 2 + 4 + 4 + 32 + 83)
+            self.assertEqual(count, 2 + 4 + 4 + 34 + 114)
             data = json.loads(Path("app/seed_data.json").read_text(encoding="utf-8"))
             data["projects"][0]["aliases"].append("Nuevo alias de prueba")
             with patch("app.seed.Path.read_text", return_value=json.dumps(data)):
