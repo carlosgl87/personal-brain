@@ -56,7 +56,7 @@ class PhaseOneTests(unittest.TestCase):
         data = json.loads(Path("app/seed_data.json").read_text(encoding="utf-8"))
         self.assertEqual(data["areas"], ["Laureate", "Consultora"])
         self.assertEqual(len(data["projects"]), 32)
-        self.assertEqual(sum(len(p["aliases"]) for p in data["projects"]), 79)
+        self.assertEqual(sum(len(p["aliases"]) for p in data["projects"]), 83)
         self.assertEqual(sum(p["area"] == "Laureate" for p in data["projects"]), 26)
         self.assertEqual(sum(p.get("company") == "Catusita" for p in data["projects"]), 3)
         keys = [(p["area"], p["slug"]) for p in data["projects"]]
@@ -72,7 +72,7 @@ class PhaseOneTests(unittest.TestCase):
             count = len(rows)
             seed(MagicMock())
             self.assertEqual(len(rows), count)
-            self.assertEqual(count, 2 + 4 + 4 + 32 + 79)
+            self.assertEqual(count, 2 + 4 + 4 + 32 + 83)
             data = json.loads(Path("app/seed_data.json").read_text(encoding="utf-8"))
             data["projects"][0]["aliases"].append("Nuevo alias de prueba")
             with patch("app.seed.Path.read_text", return_value=json.dumps(data)):

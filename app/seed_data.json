@@ -317,7 +317,9 @@
         "Catu",
         "Agente Vendedores",
         "Agente Catusita",
-        "Catusita Agente Vendedores"
+        "Catusita Agente Vendedores",
+        "Agente de Vendedores",
+        "Catusita Agente de Vendedores"
       ]
     },
     {
@@ -348,7 +350,9 @@
       "aliases": [
         "Autogestion Reclamos",
         "Autogestión de Reclamos",
-        "Reclamos Financiera Oh"
+        "Reclamos Financiera Oh",
+        "Agente Reclamos",
+        "Agente de Reclamos"
       ]
     }
   ]

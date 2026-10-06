@@ -6,10 +6,10 @@ from uuid import uuid4
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import selectinload
-from app.models import DocumentAsset, Project, Source, SourceProcessingJob
+from app.models import Area, Company, DocumentAsset, Project, Source, SourceProcessingJob
 from app.services.audio import AudioError, AudioTooLarge, download_audio
 from app.services.normalization import normalize
-from app.services.project_matching import match_project
+from app.services.project_matching import resolve_document_project
 from app.services.telegram_ingestion import TELEGRAM_UNIQUE_PREDICATE, authorized_envelope, source_result
 
 
@@ -63,7 +63,7 @@ def decode_document(data):
     return content
 
 
-def document_scope(session, content, caption):
+def document_scope(session, content, caption, filename=""):
     source_type = "document_text"
     target = caption.strip()
     if target.startswith("/"):
@@ -78,7 +78,9 @@ def document_scope(session, content, caption):
     projects = session.scalars(select(Project).where(Project.status == "active", Project.archived_at.is_(None))
                                .options(selectinload(Project.aliases))).all()
     if not target:
-        return source_type, match_project(content, projects), None
+        companies = session.scalars(select(Company)).all()
+        areas = session.scalars(select(Area)).all()
+        return source_type, resolve_document_project(filename, content, projects, companies, areas), None
     key = normalize(target)
     matches = [p for p in projects if key in {normalize(n) for n in (p.name, p.slug, *(a.alias for a in p.aliases))}]
     if len(matches) == 1:
@@ -125,7 +127,7 @@ def ingest_document(session, update, user_id, settings):
         raise AudioError("No se pudo descargar el documento; se puede reintentar.") from None
     content = decode_document(data)
     with session.begin():
-        kind, project, warning = document_scope(session, content, message.get("caption", ""))
+        kind, project, warning = document_scope(session, content, message.get("caption", ""), filename)
         source = session.scalar(insert(Source).values(
             id=uuid4(), source_type=kind, raw_content=content, raw_metadata=update,
             primary_project_id=project.id if project else None, external_source="telegram",

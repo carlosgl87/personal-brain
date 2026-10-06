@@ -149,6 +149,7 @@ class DocumentTests(unittest.TestCase):
         self.assertIsNone(selected)
         self.assertIn('ambiguo', warning)
         self.session.scalars.return_value.all.return_value = [sima, alma]
+        self.session.scalars.side_effect = lambda statement: SimpleNamespace(all=lambda: [sima, alma] if statement.column_descriptions[0]['entity'].__name__ == 'Project' else [])
         self.assertIs(document_scope(self.session, 'CIMA reunión', '')[1], sima)
         self.assertIsNone(document_scope(self.session, 'SIMA y ALMA reunión', '')[1])
         self.assertIsNone(document_scope(self.session, 'Nada identificado', '')[1])
