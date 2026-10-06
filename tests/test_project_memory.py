@@ -497,7 +497,7 @@ class ProjectMemoryTests(unittest.TestCase):
 
     def test_cloud_restarts_only_memory_worker_after_exit_and_keeps_telegram(self):
         from app.cloud import supervise
-        config_value = settings(TELEGRAM_BOT_TOKEN='fake', TELEGRAM_USER_ID='123', OPENROUTER_API_KEY='fake')
+        config_value = settings(TELEGRAM_BOT_TOKEN='fake', TELEGRAM_USER_ID='123', OPENROUTER_API_KEY='fake', SOURCE_PROCESSING_WORKER_ENABLED=False)
         api, bot, dead_worker, live_worker = [MagicMock() for _ in range(4)]
         for process in (api, bot, live_worker):
             process.poll.return_value = None

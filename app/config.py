@@ -24,6 +24,8 @@ class Settings(BaseSettings):
     memory_chunk_version: str = Field(default="paragraph-v1", min_length=1, max_length=80)
     memory_chunk_size: int = Field(default=6000, ge=4000, le=7000)
     memory_chunk_overlap: int = Field(default=350, ge=0, le=1000)
+    telegram_document_max_bytes: int = Field(default=20971520, ge=1024, le=20971520)
+    source_processing_worker_enabled: bool = True
     memory_auto_index: bool = False
     extraction_max_chars: int = Field(default=30000, ge=1000, le=100000)
     reasoning_context_max_chars: int = Field(default=100000, ge=5000, le=180000)

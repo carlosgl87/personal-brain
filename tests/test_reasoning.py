@@ -239,7 +239,7 @@ class ReasoningTests(unittest.TestCase):
 
     def test_normal_note_and_nota_with_question_do_not_reason(self):
         client = self.setup_route()
-        for text in ("Client is happy.", "/nota Question?", "Enviar informe pendiente", "que tengo pendiente de SIMA"):
+        for text in ("SIMA: Jorge aprobó posiciones.", "/nota Question?", "Ana debe enviar informe pendiente"):
             with patch("app.api.routes.telegram.ingest_update",
                 return_value={"status": "saved", "source_id": str(uuid4())}) as ingest, patch(
                 "app.api.routes.telegram.answer_reasoning") as reasoning:

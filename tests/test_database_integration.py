@@ -14,7 +14,7 @@ from sqlalchemy import create_engine, select, text, func
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session
-from sqlalchemy.pool import NullPool
+from sqlalchemy.pool import NullPool, QueuePool
 from app.models import (Area, Project, Source, Task, TaskChange, ProcessingRun, SourceChunk,
     ChunkEmbedding, ProjectMemoryState, ProjectMemoryVersion, ProjectMemoryEvent, TaskEvidence, GenerationPart)
 from app.seed import seed
@@ -41,10 +41,11 @@ class DatabaseIntegrationTests(unittest.TestCase):
         pglite=url.host == '127.0.0.1' and url.port == 55439 and url.database == 'postgres'
         if url.host not in {'127.0.0.1','localhost','::1'} or not (safe_name or pglite):
             raise ValueError('Integration tests require a disposable loopback database.')
-        cls.engine=create_engine(url,poolclass=NullPool,hide_parameters=True,
-            connect_args={"prepare_threshold":None} if pglite else {})
+        cls.engine=create_engine(url,poolclass=QueuePool if pglite else NullPool,hide_parameters=True,
+            connect_args={"prepare_threshold":None} if pglite else {},
+            **({"pool_size":1,"max_overflow":0} if pglite else {}))
         with cls.engine.connect() as conn:
-            if conn.scalar(text('SELECT version_num FROM alembic_version')) != '0009_project_memory':
+            if conn.scalar(text('SELECT version_num FROM alembic_version')) != '0010_documents_jobs':
                 raise ValueError('Apply the current migrations to the disposable database first.')
         with Session(cls.engine) as session,session.begin(): seed(session)
 
@@ -208,3 +209,187 @@ class DatabaseIntegrationTests(unittest.TestCase):
                     raise RuntimeError('rollback')
         with Session(self.engine) as session:
             self.assertEqual(session.get(ProjectMemoryState,self.a).change_revision,1)
+    def save_document(self, caption='SIMA', content='Ana debe enviar el informe mañana.', update_id=None):
+        from tests.test_documents import document
+        from app.services.documents import ingest_document
+        cfg=config(TELEGRAM_BOT_TOKEN='fake-token', TELEGRAM_USER_ID='12345', PROJECT_MEMORY_ENABLED=True)
+        payload=document(caption=caption, update_id=update_id or uuid4().int % 1000000000000)
+        with Session(self.engine) as session, patch('app.services.documents.download_audio', return_value=content.encode('utf-8')):
+            result=ingest_document(session,payload,12345,cfg)
+        return result,payload,cfg
+
+    def test_document_asset_source_job_are_atomic_idempotent_and_new_updates_are_new_sources(self):
+        from app.models import DocumentAsset,SourceProcessingJob
+        from app.services.documents import ingest_document
+        result,payload,cfg=self.save_document()
+        sid=UUID(result['source_id'])
+        with Session(self.engine) as session, patch('app.services.documents.download_audio') as download:
+            repeat=ingest_document(session,payload,12345,cfg)
+        self.assertEqual(repeat['source_id'],result['source_id']); download.assert_not_called()
+        payload['update_id']+=1
+        with Session(self.engine) as session, patch('app.services.documents.download_audio', return_value=b'Ana debe enviar el informe manana.'):
+            new=ingest_document(session,payload,12345,cfg)
+        self.assertNotEqual(result['source_id'],new['source_id'])
+        with Session(self.engine) as session:
+            asset=session.scalar(select(DocumentAsset).where(DocumentAsset.source_id==sid))
+            self.assertEqual(asset.original_bytes,'Ana debe enviar el informe mañana.'.encode())
+            self.assertEqual(session.get(Source,sid).raw_content,asset.original_bytes.decode())
+            self.assertEqual(session.scalar(select(func.count(SourceProcessingJob.id)).where(SourceProcessingJob.source_id==sid)),1)
+            self.assertEqual(session.scalar(select(func.count(Task.id)).where(Task.source_id==sid)),0)
+            self.assertEqual(session.scalar(select(func.count(ProjectMemoryEvent.id)).where(ProjectMemoryEvent.source_id==sid)),0)
+
+    def test_document_job_insert_failure_rolls_back_source_and_asset(self):
+        from app.services.documents import ingest_document
+        from app.models import DocumentAsset,SourceProcessingJob
+        from tests.test_documents import document
+        payload=document(caption='SIMA',update_id=uuid4().int % 1000000000000)
+        cfg=config(TELEGRAM_BOT_TOKEN='fake-token',TELEGRAM_USER_ID='12345')
+        with Session(self.engine) as session, patch('app.services.documents.download_audio',return_value=b'text'):
+            original_add=session.add
+            def add(row):
+                if isinstance(row,SourceProcessingJob): raise RuntimeError('simulated queue failure')
+                original_add(row)
+            with patch.object(session,'add',side_effect=add), self.assertRaises(RuntimeError):
+                ingest_document(session,payload,12345,cfg)
+        with Session(self.engine) as session:
+            self.assertIsNone(session.scalar(select(Source).where(Source.external_source=='telegram',Source.external_id==str(payload['update_id']))))
+
+    def test_document_original_bytes_cannot_be_updated_or_deleted(self):
+        result,_,_=self.save_document()
+        # Catch trigger violations inside SQL for compatibility with the embedded test protocol.
+        sid=UUID(result['source_id'])
+        for statement in ["UPDATE document_assets SET original_bytes=decode('00','hex') WHERE source_id='%s'" % sid,
+                          "DELETE FROM document_assets WHERE source_id='%s'" % sid]:
+            sql="DO $$ BEGIN BEGIN "+statement+"; RAISE EXCEPTION 'immutability missing' USING ERRCODE='XX000'; EXCEPTION WHEN SQLSTATE 'P0001' THEN NULL; END; END $$;"
+            with self.engine.begin() as conn: conn.execute(text(sql))
+
+    def test_queue_claim_completion_retry_and_stale_tokens_use_real_sql(self):
+        from app.models import SourceProcessingJob
+        from app.services.source_processing_jobs import claim_job,finish_job
+        result,_,_=self.save_document(); sid=UUID(result['source_id'])
+        with Session(self.engine) as session,session.begin():
+            token=claim_job(session,sid,self.now+timedelta(seconds=1))
+        self.assertIsNotNone(token)
+        with Session(self.engine) as session,session.begin():
+            self.assertFalse(finish_job(session,sid,uuid4(),self.now))
+            self.assertTrue(finish_job(session,sid,token,self.now,'processing_failed'))
+        with Session(self.engine) as session,session.begin():
+            self.assertIsNone(claim_job(session,sid,self.now+timedelta(seconds=10)))
+            second=claim_job(session,sid,self.now+timedelta(seconds=61))
+            self.assertNotEqual(second,token)
+        with Session(self.engine) as session,session.begin():
+            self.assertFalse(finish_job(session,sid,token,self.now))
+            self.assertTrue(finish_job(session,sid,second,self.now+timedelta(seconds=62)))
+        with Session(self.engine) as session:
+            self.assertEqual(session.scalar(select(SourceProcessingJob.status).where(SourceProcessingJob.source_id==sid)),'completed')
+
+    def test_document_worker_reuses_extraction_and_notification_failure_keeps_completed(self):
+        from app.source_processing_worker import run_once
+        from app.models import SourceProcessingJob,DocumentAsset
+        result,_,cfg=self.save_document(); sid=UUID(result['source_id'])
+        with patch('app.source_processing_worker.candidate_ids',return_value=[sid]), patch(
+            'app.services.processing.extract',return_value=Extraction.model_validate(output(task=True))) as extract, patch(
+            'app.source_processing_worker.TelegramAPI') as api:
+            api.return_value.call.side_effect=RuntimeError('fake secret')
+            self.assertEqual(run_once(self.engine,cfg),1)
+            self.assertEqual(run_once(self.engine,cfg),0)
+            extract.assert_called_once()
+        with Session(self.engine) as session:
+            self.assertEqual(session.scalar(select(SourceProcessingJob.status).where(SourceProcessingJob.source_id==sid)),'completed')
+            self.assertEqual(session.scalar(select(func.count(Task.id)).where(Task.source_id==sid)),1)
+            self.assertEqual(session.scalar(select(func.count(ProcessingRun.id)).where(ProcessingRun.source_id==sid)),1)
+            self.assertEqual(session.scalar(select(func.count(ProjectMemoryEvent.id)).where(ProjectMemoryEvent.source_id==sid)),1)
+            self.assertIsNotNone(session.scalar(select(DocumentAsset).where(DocumentAsset.source_id==sid)))
+
+    def test_unknown_document_caption_stays_unassigned_after_extraction(self):
+        result,_,cfg=self.save_document(caption='/proyecto NoExiste',content='SIMA: Ana debe enviar el informe mañana.')
+        sid=UUID(result['source_id'])
+        with Session(self.engine) as session:
+            sima=session.scalar(select(Project.id).where(Project.slug=='sima'))
+        with Session(self.engine) as session,patch('app.services.processing.extract',return_value=Extraction.model_validate(output(project_id=sima,task=True))):
+            process_text_source(session,sid,cfg)
+        with Session(self.engine) as session:
+            self.assertIsNone(session.get(Source,sid).primary_project_id)
+            self.assertIsNone(session.scalar(select(Task.project_id).where(Task.source_id==sid)))
+
+    def test_query_ingestion_and_catalog_do_not_create_tasks_or_memory_events(self):
+        from app.services.telegram_ingestion import ingest_update
+        from app.services.queries import catalog_query,answer_query
+        from tests.test_telegram import update
+        payload=update(update_id=uuid4().int % 1000000000000,content='dame una lista de todos los proyectos que tienes')
+        with Session(self.engine) as session:
+            result=ingest_update(session,payload,12345,is_query=True)
+            answer=answer_query(session,catalog_query(payload['message']['text']))
+            self.assertIn('Proyectos registrados:',answer)
+            self.assertIn('SIMA',answer)
+        sid=UUID(result['source_id'])
+        with Session(self.engine) as session:
+            self.assertEqual(session.get(Source,sid).source_type,'telegram_query')
+            self.assertEqual(session.scalar(select(func.count(Task.id)).where(Task.source_id==sid)),0)
+            self.assertEqual(session.scalar(select(func.count(ProjectMemoryEvent.id)).where(ProjectMemoryEvent.source_id==sid)),0)
+
+    def test_queue_advisory_lock_excludes_other_backend_on_native_postgres(self):
+        if make_url(TEST_URL).port==55439:
+            self.skipTest('Embedded database shares one backend; native concurrency must be checked separately')
+        from app.services.source_processing_jobs import lock_id
+        result,_,_=self.save_document(); key=lock_id(result['source_id'])
+        with self.engine.connect().execution_options(isolation_level='AUTOCOMMIT') as first, self.engine.connect().execution_options(isolation_level='AUTOCOMMIT') as second:
+            self.assertTrue(first.scalar(text('SELECT pg_try_advisory_lock(:key)'),{'key':key}))
+            try:
+                self.assertFalse(second.scalar(text('SELECT pg_try_advisory_lock(:key)'),{'key':key}))
+            finally:
+                first.scalar(text('SELECT pg_advisory_unlock(:key)'),{'key':key})
+            self.assertTrue(second.scalar(text('SELECT pg_try_advisory_lock(:key)'),{'key':key}))
+            second.scalar(text('SELECT pg_advisory_unlock(:key)'),{'key':key})
+    def test_document_worker_hierarchical_retry_preserves_parts_and_original(self):
+        from app.source_processing_worker import run_once,retry_source
+        from app.models import DocumentAsset,ProcessingRunPart,SourceProcessingJob
+        content='SIMA. '+ 'x'*5880 + ' '+ QUOTE + ' '+ 'y'*31000
+        result,_,cfg=self.save_document(caption='/reunion SIMA',content=content)
+        sid=UUID(result['source_id']); provider=FakeClaude(fail_part=3)
+        with patch('app.source_processing_worker.candidate_ids',return_value=[sid]), patch(
+            'app.services.hierarchical_llm.call_json',side_effect=provider), patch('app.source_processing_worker.notify_completed') as notify:
+            self.assertEqual(run_once(self.engine,cfg),1)
+            notify.assert_not_called()
+            with Session(self.engine) as session:
+                original_parts=set(session.scalars(select(ProcessingRunPart.id).where(ProcessingRunPart.source_id==sid)))
+                self.assertEqual(len(original_parts),2)
+                self.assertEqual(session.scalar(select(SourceProcessingJob.status).where(SourceProcessingJob.source_id==sid)),'retry')
+                self.assertEqual(session.get(Source,sid).raw_content,content)
+            self.assertTrue(retry_source(self.engine,sid))
+            provider.fail_part=None; previous_calls=provider.part_calls
+            self.assertEqual(run_once(self.engine,cfg),1)
+            notify.assert_called_once()
+        with Session(self.engine) as session:
+            parts=set(session.scalars(select(ProcessingRunPart.id).where(ProcessingRunPart.source_id==sid)))
+            self.assertTrue(original_parts.issubset(parts))
+            self.assertEqual(provider.part_calls-previous_calls,len(parts)-2)
+            self.assertEqual(provider.consolidation_calls,1)
+            self.assertEqual(session.scalar(select(SourceProcessingJob.status).where(SourceProcessingJob.source_id==sid)),'completed')
+            self.assertEqual(session.scalar(select(DocumentAsset.original_bytes).where(DocumentAsset.source_id==sid)),content.encode())
+            self.assertEqual(session.scalar(select(func.count(Task.id)).where(Task.source_id==sid)),1)
+            self.assertGreater(session.scalar(select(func.count(TaskEvidence.id)).join(Task).where(Task.source_id==sid)),0)
+
+    def test_queue_workers_do_not_process_same_source_concurrently_on_native_postgres(self):
+        if make_url(TEST_URL).port==55439:
+            self.skipTest('Native independent backends are required for concurrent workers')
+        from concurrent.futures import ThreadPoolExecutor
+        import threading
+        from app.source_processing_worker import run_once
+        result,_,cfg=self.save_document(); sid=UUID(result['source_id'])
+        entered=threading.Event(); release=threading.Event()
+        def index(*args):
+            entered.set()
+            if not release.wait(10): raise RuntimeError('Test synchronization timeout')
+        with patch('app.source_processing_worker.candidate_ids',return_value=[sid]), patch(
+            'app.source_processing_worker.index_source',side_effect=index) as indexed, patch(
+            'app.source_processing_worker.process_source',return_value={'status':'processed','tasks_count':0,'decisions_count':0}) as process, patch(
+            'app.source_processing_worker.notify_completed'), ThreadPoolExecutor(max_workers=2) as pool:
+            first=pool.submit(run_once,self.engine,cfg)
+            try:
+                self.assertTrue(entered.wait(10))
+                self.assertEqual(pool.submit(run_once,self.engine,cfg).result(timeout=10),0)
+            finally:
+                release.set()
+            self.assertEqual(first.result(timeout=10),1)
+            indexed.assert_called_once(); process.assert_called_once()

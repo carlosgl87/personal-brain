@@ -9,6 +9,7 @@ from app.config import get_settings
 from app.services.telegram_ingestion import authorized_message
 from app.services.queries import answer_chunks
 from app.services.audio import authorized_audio
+from app.services.documents import authorized_document
 
 
 class PollingError(RuntimeError):
@@ -94,12 +95,20 @@ def process_saved_source(client, api_url, token, source_id):
 
 
 def process_update(client, telegram, api_url, token, user_id, update, processing=False):
-    if authorized_message(update, user_id) is None and authorized_audio(update, user_id) is None:
+    if authorized_message(update, user_id) is None and authorized_audio(update, user_id) is None and authorized_document(update, user_id) is None:
         return
     result = forward_update(client, api_url, token, update)
     if result["status"] == "answered":
         for chunk in answer_chunks(result["answer"]):
             telegram.call("sendMessage", {"chat_id": user_id, "text": chunk})
+        return
+    if result.get("media_type") == "document":
+        if result["status"] == "saved":
+            try:
+                for chunk in answer_chunks(result["answer"]):
+                    telegram.call("sendMessage", {"chat_id": user_id, "text": chunk})
+            except PollingError:
+                print("Documento guardado; no se pudo enviar la confirmación en Telegram.")
         return
     extraction = None
     if processing and result["status"] in {"saved", "duplicate"}:
@@ -159,7 +168,7 @@ def run(port: int, processing=False):
             except RetryablePollingError as exc:
                 print(str(exc))
                 time.sleep(exc.retry_after)
-        print("Telegram texto y audio activos. Solo se acepta el usuario autorizado en chat privado. Ctrl+C para detener.")
+        print("Telegram texto, audio y documentos activos. Solo se acepta el usuario autorizado en chat privado. Ctrl+C para detener.")
         offset = None
         failures = 0
         while True:

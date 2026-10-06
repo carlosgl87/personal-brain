@@ -14,7 +14,7 @@ HELP = """Actualizar contexto del proyecto:
 Preguntas con evidencia:
  /ask texto de la pregunta
  /pregunta texto de la pregunta
- Las preguntas con signos de interrogacion usan Claude.
+ También se reconocen consultas naturales sin signos de interrogación.
 
 Gestionar tareas (UUID mostrado en /pendientes):
  /completar UUID
@@ -23,7 +23,7 @@ Gestionar tareas (UUID mostrado en /pendientes):
  /responsable UUID Nombre completo
  /proyecto UUID Nombre o alias
 
-Puedes consultar:
+Documentos TXT/MD: caption SIMA, /reunion SIMA o /documento SIMA.\n /procesamiento [UUID de fuente]\n\nPuedes consultar:
  /pendientes SIMA
  /pendientes Catusita
  /pendientes con Ana
@@ -221,6 +221,15 @@ def source_ref(source_id):
     return "Fuente: " + str(source_id) if source_id else "Registro manual sin fuente"
 
 
+def catalog_query(text):
+    value = normalize(text)
+    # An entire catalog request, not a substring in a longer analytical question.
+    match = re.fullmatch(r"(?:(?:dame|muestrame) (?:una |la )?lista de |lista |(?:cuales|que) son )?(?:todos )?(?:los )?proyectos(?: (?:de|del|de la) (laureate|consultora))?(?: que tienes)?", value)
+    if match:
+        return Query("projects", "area " + match.group(1) if match.group(1) else "")
+    return None
+
+
 def answer_query(session, query: Query) -> str:
     if query.kind == "help":
         return HELP
@@ -229,6 +238,9 @@ def answer_query(session, query: Query) -> str:
     scope = resolve_scope(session, query.target)
     if scope.error:
         return scope.error
+    if query.kind == "projects":
+        projects = session.scalars(scoped(select(Project), Project.id, scope).order_by(Project.name, Project.id)).all()
+        return "\n".join([scope.label, f"Proyectos registrados: {len(projects)}", *("• " + p.name for p in projects)])
     if query.kind == "tasks":
         statement = task_statement(scope)
         if query.owner:

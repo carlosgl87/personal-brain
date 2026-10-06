@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.models import Decision, ProcessingRun, Project, Source, Task
 from app.services.claude import ExtractionError, PROMPT_VERSION, extract
-from app.services.project_matching import match_project
+from app.services.project_matching import allows_content_project, match_project
 from app.models.task_change import TaskChange
 from app.services.project_memory_events import mark_dirty
 from app.services.source_revisions import revision_projects
@@ -86,7 +86,7 @@ def process_text_source(session: Session, source_id: UUID, settings, force=False
             # Una propuesta del LLM necesita también una coincidencia inequívoca del catálogo.
             matched = match_project(source.raw_content, projects)
             project_id = source.primary_project_id
-            if project_id is None and matched is not None and result.project_id == matched.id:
+            if project_id is None and matched is not None and result.project_id == matched.id and allows_content_project(source):
                 project_id = matched.id
             result.project_id = project_id
             _, model = settings.llm_credentials()

@@ -21,3 +21,7 @@ from app.models.extraction_evidence import ProcessingRunPart, TaskEvidence, Deci
 
 from app.models.vector_versions import ChunkEmbedding, ExtractionGeneration, GenerationPart
 from app.models.project_memory import ProjectMemoryVersion, ProjectMemoryState, ProjectMemoryEvent
+
+from app.models.document_asset import DocumentAsset
+from app.models.source_processing_job import SourceProcessingJob
+__all__ += ["DocumentAsset", "SourceProcessingJob"]

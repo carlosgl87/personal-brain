@@ -12,7 +12,7 @@ from app.services.claude import ExtractionError
 from app.services.hierarchical_llm import (CONSOLIDATION_PROMPT_VERSION, PART_PROMPT_VERSION,
                                            consolidate, extract_part)
 from app.services.memory import ensure_source_chunks
-from app.services.project_matching import match_project
+from app.services.project_matching import allows_content_project, match_project
 from app.services.project_memory_events import mark_dirty
 from app.services.source_revisions import revision_projects
 
@@ -148,7 +148,7 @@ def process_hierarchical(session, source_id, settings, force=False, refresh_part
             result, provenance = consolidate(settings, snapshot, parts, projects)
             matched = match_project(source.raw_content, projects)
             project_id = source.primary_project_id
-            if project_id is None and matched is not None and result.project_id == matched.id:
+            if project_id is None and matched is not None and result.project_id == matched.id and allows_content_project(source):
                 project_id = matched.id
             result.project_id = project_id
             stored = result.model_dump(mode="json") | {

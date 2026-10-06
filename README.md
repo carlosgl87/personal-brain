@@ -738,7 +738,7 @@ La actualización incremental envía memoria previa + fuentes de los eventos nue
 
 Alrededor de las 03:00 America/Lima se reconcilian proyectos cambiados desde la última reconciliación: memoria anterior, evidencia reciente, SQL actual y hasta 8 chunks semánticos históricos si están disponibles. No se recorre el archivo completo. Cambios llegados después de la hora nocturna siguen el debounce normal y quedan para la noche siguiente. Proyectos sin cambios no llaman a Claude. Un fallo por proyecto registra un mensaje seguro y aplica 60 segundos de espera antes de reintentar.
 
-`app.cloud` inicia FastAPI, el receptor Telegram y el worker dentro del mismo contenedor. El worker inicia al obtener el turno del bot; si termina, se reinicia tras 30 segundos y Telegram sigue activo. Una actualización fallida no termina el worker ni los otros procesos. El apagado del supervisor detiene sus hijos. La extracción jerárquica continúa síncrona; la nueva consolidación de memoria se realiza fuera del request Telegram.
+`app.cloud` inicia FastAPI, el receptor Telegram y el worker dentro del mismo contenedor. El worker inicia al obtener el turno del bot; si termina, se reinicia tras 30 segundos y Telegram sigue activo. Una actualización fallida no termina el worker ni los otros procesos. El apagado del supervisor detiene sus hijos. La consolidación de memoria se realiza fuera del request Telegram. La extracción de texto y audio mantiene su flujo; los documentos Telegram se procesan mediante el worker de fuentes descrito abajo.
 
 ### Consultas, refresh y costos
 
@@ -809,7 +809,7 @@ python -m app.seed
 alembic current
 ```
 
-El último comando debe mostrar `0009_project_memory`. Seed se solicita solamente para esta base nueva de prueba, no para producción. Las claves LLM/OpenRouter pueden seguir en tu `.env` privado; no las imprimas.
+El último comando debe mostrar `0010_documents_jobs` en la versión actual. Seed se solicita solamente para esta base nueva de prueba, no para producción. Las claves LLM/OpenRouter pueden seguir en tu `.env` privado; no las imprimas.
 
 3. Solo cuando quieras consumir APIs con el archivo real, sustituye la ruta por tu archivo CIMA UTF-8 `.txt` o `.md`:
 
@@ -912,3 +912,94 @@ Remove-Item Env:PERSONAL_BRAIN_TEST_DATABASE_URL
 ```
 
 Las pruebas habituales sin esa variable omiten las pruebas SQL; no cargan `.env` ni consumen APIs.
+
+## Telegram: documentos y enrutamiento de intención (0010)
+
+Los TXT y MD del usuario autorizado en chat privado se descargan de Telegram, se decodifican estrictamente como UTF-8 y se conservan completos. `document_assets` guarda los bytes originales, SHA-256, nombre, MIME, tamaño e identificadores del archivo; un trigger impide modificar o borrar ese original. `sources.raw_content` conserva todo el texto. PDF y DOCX reciben una explicación y no se ingieren.
+
+El Source, DocumentAsset y trabajo de `source_processing_jobs` se confirman juntos. La identidad es `update_id`: repetir el update reutiliza la misma fuente y trabajo; enviar el mismo archivo en otro update crea otra entrada. El hash identifica el contenido, pero no deduplica reuniones diferentes.
+
+Caption admitido:
+
+| Caption | Tipo | Asociación |
+| --- | --- | --- |
+| `SIMA` o `/proyecto SIMA` | `document_text` | Proyecto o alias exacto del catálogo |
+| `/documento SIMA` | `document_text` | Proyecto o alias exacto |
+| `/reunion SIMA` | `meeting_transcript` | Proyecto o alias exacto |
+| Sin caption | `document_text` | Coincidencia inequívoca del contenido completo |
+
+Un caption desconocido o ambiguo conserva el archivo sin proyecto y lo informa. Esa asociación vacía sigue siendo respetada durante la extracción. El nombre del archivo no determina el proyecto. `/proyecto UUID SIMA` enviado como texto continúa editando una tarea; el caption se interpreta solamente en mensajes con documento.
+
+Variables nuevas en `.env.example` (no requieren otra API key):
+
+```ini
+TELEGRAM_DOCUMENT_MAX_BYTES=20971520
+SOURCE_PROCESSING_WORKER_ENABLED=true
+```
+
+Extensión, nombre sin rutas, referencias y tamaño declarado se validan antes de descargar. La descarga comprueba tamaño real, integridad y ruta relativa de Telegram; rechaza redirecciones y traversal. UTF-8 inválido responde: «El archivo no está codificado en UTF-8 y no pudo procesarse.» No guarda texto parcial.
+
+Telegram confirma tras guardar:
+
+```text
+Archivo guardado: reunion_sima.txt
+Proyecto: SIMA
+Tipo: meeting_transcript
+Procesamiento: encolado
+Fuente: UUID
+```
+
+La recepción de documentos no llama a Claude, embeddings ni extracción. El worker `python -m app.source_processing_worker` indexa y llama a `process_source`, reutilizando chunks, extracción jerárquica, partes exitosas, consolidación y evidencia. La extracción correcta genera el evento de Project Memory existente; su worker aplica el debounce. Texto y audio conservan su procesamiento actual.
+
+Cada fuente tiene un solo trabajo. El worker usa un advisory lock de sesión por fuente, claim con `FOR UPDATE SKIP LOCKED` y token por intento; una caída libera ownership y permite recuperar el trabajo `processing`. Mantiene una misma conexión con transacciones normales por etapa. Conserva originales, chunks, embeddings y partes confirmadas. Reintenta a 1, 5, 15 y 60 minutos; después mantiene 60 minutos, hasta 6 intentos. Un fallo solo guarda un código seguro. Un documento que exceda los límites de extracción se conserva y informa `extraction_limit`; no inicia llamadas pagadas antes de esa validación.
+
+Después del commit de `completed` y de liberar el bloqueo, intenta enviar una confirmación con proyecto, tareas, decisiones y UUID. Si Telegram falla, el trabajo sigue completado; no se repite la extracción ni se garantiza recuperar esa notificación. Consulta el estado:
+
+```text
+/procesamiento
+/procesamiento UUID
+```
+
+La lista limita cada sección a tres trabajos. Muestra pendientes, procesando, reintentos, completados y fallidos recientes. Para reencolar un trabajo fallido o en retry, después de corregir la causa, usa en un entorno autorizado con la conexión correcta:
+
+```powershell
+python -m app.source_processing_worker --retry UUID
+python -m app.source_processing_worker --once
+```
+
+`--once` atiende como máximo un trabajo. No sustituye el worker continuo. `app.cloud` inicia el worker y lo reinicia tras 30 segundos si cae, manteniendo API, Telegram y Project Memory activos.
+
+El enrutamiento de texto aplica: autorización → documento → audio → comandos explícitos → reglas → clasificador solo si queda duda. Las consultas se guardan como `telegram_query`, sin extracción de tareas/decisiones ni eventos de memoria. Las notas siguen como `telegram_text`. El scope se resuelve separadamente con el catálogo.
+
+Ejemplos para probar en Telegram después de autorizar el despliegue:
+
+- `dame una lista de todos los proyectos que tienes`: catálogo SQL, sin llamadas a Claude.
+- `lista todos los proyectos de Laureate` y `cuáles son los proyectos de la consultora`: catálogo filtrado por área.
+- `dime cómo está SIMA` y `qué tengo que hacer esta semana`: consulta de razonamiento existente.
+- `SIMA: Jorge aprobó posiciones.` y `Ana debe enviar el informe mañana.`: información nueva.
+- `OpenRouter de Estrategia`: guía para aclarar, cuando el clasificador la considere ambigua o tenga confianza menor de 0.80.
+- `/nota cómo está SIMA?`: siempre nota; `/ask Jorge aprobó posiciones`: siempre consulta. `/pregunta` equivale a `/ask`.
+
+El clasificador usa las credenciales existentes de Claude, un esquema estricto de intención/confianza y `intent-router-v1` con hasta 512 tokens de salida. No recibe catálogo ni genera scope, SQL, tareas o respuestas. Ante fallo pide `/ask` o `/nota`; no guarda arbitrariamente una nota. Las consultas/novedades claras y los comandos no necesitan clasificador. Los logs registran solo la intención, sin texto recibido.
+
+Para validar manualmente un documento, crea un TXT UTF-8 con «SIMA: Ana debe enviar el informe mañana», envíalo como **archivo** con caption `/reunion SIMA`, comprueba el recibo encolado y usa `/procesamiento UUID`. Después confirma tareas con `/pendientes SIMA`. Prueba también un MD, un caption desconocido, un TXT inválido UTF-8 y un formato no admitido. No pruebes con un bot productivo mientras otro receptor local del mismo bot esté activo.
+
+Migración nueva: `0010_documents_jobs`, posterior a `0009_project_memory`; no modifica 0001–0009 ni hace backfill. Los downgrades destructivos siguen deshabilitados. El predeploy existente aplicará `alembic upgrade head` cuando se autorice publicar esta versión.
+
+Pruebas habituales, desde la raíz con la venv:
+
+```powershell
+.\.venv\Scripts\python.exe -B -m unittest discover -s tests -v
+.\.venv\Scripts\python.exe -m pip check
+git diff --check
+```
+
+Para SQL, usa exclusivamente una base **desechable local**, con pgvector y nombre `personal_brain_test_...`, ya migrada hasta 0010; para probar actualización, usa otra base local **vacía**. No uses Railway. Establece ambas variables de pruebas en esa terminal y ejecuta la misma suite. Sin ellas, las pruebas SQL se omiten expresamente. Las pruebas de concurrencia entre backends requieren PostgreSQL nativo; la base embebida no las acredita.
+
+```powershell
+$env:PERSONAL_BRAIN_TEST_DATABASE_URL='postgresql+psycopg://usuario:clave@127.0.0.1:5432/personal_brain_test_docs'
+$env:PERSONAL_BRAIN_MIGRATION_TEST_DATABASE_URL='postgresql+psycopg://usuario:clave@127.0.0.1:5432/personal_brain_test_upgrade_empty'
+.\.venv\Scripts\python.exe -B -m unittest discover -s tests -v
+```
+
+Limitaciones: el máximo de archivo es independiente del máximo de chunks de extracción; documentos mayores se preservan completos y pueden necesitar ajuste explícito o tratamiento distinto. La recepción espera la descarga, aunque el procesamiento pesado esté desacoplado. El clasificador y los proveedores reales aún requieren validación de calidad/latencia; una llamada externa interrumpida antes del commit puede necesitar repetirse. La memoria no aparece actualizada inmediatamente por el debounce. No se añade búsqueda integral de toda la historia ni recordatorios.

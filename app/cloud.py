@@ -44,8 +44,9 @@ def wait_api(port, child, stop, timeout=120):
 
 
 def supervise(port, stop):
-    api = bot = memory_worker = connection = None
+    api = bot = memory_worker = source_worker = connection = None
     worker_restart_after = 0
+    source_restart_after = 0
     lock_id = None
     locked = False
     try:
@@ -99,6 +100,18 @@ def supervise(port, stop):
                     except Exception:
                         worker_restart_after = time.monotonic() + 30
                         print("Project Memory worker no pudo iniciar; Telegram sigue activo.", flush=True)
+            if locked and settings.source_processing_worker_enabled is True:
+                if source_worker is not None and source_worker.poll() is not None:
+                    print("Source processing worker detenido; Telegram sigue activo. Reintento en 30 segundos.", flush=True)
+                    source_worker = None
+                    source_restart_after = time.monotonic() + 30
+                if source_worker is None and time.monotonic() >= source_restart_after:
+                    try:
+                        source_worker = subprocess.Popen([sys.executable, "-m", "app.source_processing_worker"])
+                        print("Source processing worker iniciado.", flush=True)
+                    except Exception:
+                        source_restart_after = time.monotonic() + 30
+                        print("Source processing worker no pudo iniciar; Telegram sigue activo.", flush=True)
             stop.wait(2)
         return 0
     except Exception:
@@ -106,7 +119,7 @@ def supervise(port, stop):
         return 1
     finally:
         # Stop polling before releasing ownership, even if another child fails to stop.
-        for child in (bot, memory_worker, api):
+        for child in (bot, source_worker, memory_worker, api):
             try:
                 stop_child(child)
             except Exception:
