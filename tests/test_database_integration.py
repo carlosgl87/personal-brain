@@ -26,6 +26,8 @@ from app.services.project_memory_retrieval import retrieve_project_memories
 from app.services.queries import Scope, task_statement, source_statement
 from app.services.memory import index_source, semantic_search
 from app.services.task_management import TaskCommand, edit_task
+from app.models import TaskCompletionAttempt
+from app.services.task_completion import CompletionProposal, complete_from_note
 from test_hierarchical import config, output, QUOTE, FakeClaude
 from test_project_memory import memory
 
@@ -45,7 +47,7 @@ class DatabaseIntegrationTests(unittest.TestCase):
             connect_args={"prepare_threshold":None} if pglite else {},
             **({"pool_size":1,"max_overflow":0} if pglite else {}))
         with cls.engine.connect() as conn:
-            if conn.scalar(text('SELECT version_num FROM alembic_version')) != '0010_documents_jobs':
+            if conn.scalar(text('SELECT version_num FROM alembic_version')) != '0011_task_completion_attempts':
                 raise ValueError('Apply the current migrations to the disposable database first.')
         with Session(cls.engine) as session,session.begin(): seed(session)
 
@@ -84,6 +86,67 @@ class DatabaseIntegrationTests(unittest.TestCase):
             seed(session); seed(session)
             self.assertEqual(session.scalar(select(func.count(Project.id))),before)
             self.assertGreaterEqual(before,32)
+
+    def natural_completion_fixture(self):
+        original = self.save_source(self.a)
+        self.process(original)
+        with Session(self.engine) as session, session.begin():
+            task = session.scalar(select(Task).where(Task.source_id == original))
+            task_id = task.id
+            note_id = uuid4()
+            note = 'Ya envié el informe del proyecto Audit ' + str(self.a) + '.'
+            session.add(Source(id=note_id, source_type='telegram_text', raw_content=note,
+                raw_metadata={}, external_source='telegram', external_id=str(note_id), primary_project_id=self.a))
+        proposal = CompletionProposal(completion_detected=True, matched_task_id=task_id,
+            confidence=.99, reason_code='completed', evidence=note, alternatives=[])
+        return original, note_id, task_id, note, proposal
+
+    def test_natural_completion_persists_once_and_flows_into_memory_version(self):
+        original, note_id, task_id, note, proposal = self.natural_completion_fixture()
+        with Session(self.engine) as session, session.begin():
+            captured, data = snapshot_data(session, self.a, self.cfg)
+            publish_memory(session, self.a, captured, data, memory(original).model_dump(mode='json'),
+                           self.cfg, False, self.now)
+        with patch('app.services.task_completion.propose_completion', return_value=proposal) as llm:
+            with Session(self.engine) as session:
+                first = complete_from_note(session, note_id, self.cfg)
+            with Session(self.engine) as session:
+                second = complete_from_note(session, note_id, self.cfg)
+        self.assertEqual(first, second)
+        llm.assert_called_once()
+        with Session(self.engine) as session, session.begin():
+            self.assertEqual(session.get(Task, task_id).status, 'completed')
+            self.assertEqual(session.get(Source, note_id).raw_content, note)
+            self.assertEqual(session.scalar(select(func.count(TaskChange.id)).where(
+                TaskChange.command_source_id == note_id)), 1)
+            self.assertEqual(session.scalar(select(func.count(TaskCompletionAttempt.id)).where(
+                TaskCompletionAttempt.source_id == note_id)), 1)
+            self.assertEqual(session.scalar(select(func.count(ProjectMemoryEvent.id)).where(
+                ProjectMemoryEvent.command_source_id == note_id)), 1)
+            _, deltas, _ = retrieve_project_memories(session, Scope([self.a], 'A'), self.cfg)
+            delta = next(d for d in deltas if d.get('source_id') == str(note_id))
+            self.assertEqual(delta['action'], 'natural_completion')
+            self.assertEqual(delta['current_task']['status'], 'completed')
+            captured, data = snapshot_data(session, self.a, self.cfg)
+            self.assertEqual(data['changes'][0]['action'], 'natural_completion')
+            version_id = publish_memory(session, self.a, captured, data,
+                memory(note_id, 'Informe enviado.').model_dump(mode='json'), self.cfg, False, self.now)
+            self.assertEqual(session.get(ProjectMemoryVersion, version_id).through_revision, captured.cursor)
+            self.assertFalse(session.get(ProjectMemoryState, self.a).is_dirty)
+
+    def test_natural_completion_rolls_back_task_audit_and_attempt_when_event_fails(self):
+        _, note_id, task_id, note, proposal = self.natural_completion_fixture()
+        with Session(self.engine) as session, patch('app.services.task_completion.propose_completion', return_value=proposal), patch(
+                'app.services.task_management.mark_dirty', side_effect=RuntimeError('Simulated event failure')):
+            with self.assertRaises(RuntimeError):
+                complete_from_note(session, note_id, self.cfg)
+        with Session(self.engine) as session:
+            self.assertEqual(session.get(Task, task_id).status, 'open')
+            self.assertEqual(session.get(Source, note_id).raw_content, note)
+            self.assertEqual(session.scalar(select(func.count(TaskChange.id)).where(
+                TaskChange.command_source_id == note_id)), 0)
+            self.assertEqual(session.scalar(select(func.count(TaskCompletionAttempt.id)).where(
+                TaskCompletionAttempt.source_id == note_id)), 0)
 
     def test_processing_is_idempotent_and_current_queries_use_latest_run(self):
         sid=self.save_source(self.a)

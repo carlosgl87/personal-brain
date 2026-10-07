@@ -109,7 +109,7 @@ class PhaseOneTests(unittest.TestCase):
         client = TestClient(app)
         self.assertEqual(client.get("/health").json(), {"status": "ok"})
         with patch("app.api.routes.health.get_engine") as engine:
-            engine.return_value.connect.return_value.__enter__.return_value.execute.return_value.scalars.return_value.all.return_value = ["0010_documents_jobs"]
+            engine.return_value.connect.return_value.__enter__.return_value.execute.return_value.scalars.return_value.all.return_value = ["0011_task_completion_attempts"]
             self.assertEqual(client.get("/health/db").status_code, 200)
             engine.side_effect = RuntimeError("test-secret")
             response = client.get("/health/db")

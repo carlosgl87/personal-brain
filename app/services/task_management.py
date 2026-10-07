@@ -57,6 +57,20 @@ def snapshot(task):
     }
 
 
+def record_task_change(session, task, source_id, action, before, answer, settings=None):
+    """Audit and memory event in the caller's task mutation transaction."""
+    after = snapshot(task)
+    change_id = uuid4()
+    session.add(TaskChange(id=change_id, task_id=task.id, command_source_id=source_id,
+                          action=action, before=before, after=after, answer=answer))
+    if settings is not None and before != after:
+        projects = {UUID(value) for value in (before["project_id"], after["project_id"]) if value}
+        for project_id in sorted(projects, key=str):
+            mark_dirty(session, project_id, settings, origin_key="task:" + str(change_id),
+                       source_id=task.source_id, task_id=task.id, command_source_id=source_id,
+                       event_type="task_change")
+
+
 def edit_task(session, command, command_source_id, settings=None):
     if command.error:
         return command.error
@@ -107,15 +121,6 @@ def edit_task(session, command, command_source_id, settings=None):
                 task.project_id = scope.project_ids[0]
         else:
             return HELP
-        after = snapshot(task)
         answer = "Tarea actualizada: " + str(task.id) + "\nAcción: " + command.action + "\n" + HELP.splitlines()[-1]
-        change_id = uuid4()
-        session.add(TaskChange(id=change_id, task_id=task.id, command_source_id=command_source_id,
-                               action=command.action, before=before, after=after, answer=answer))
-        if settings is not None and before != after:
-            projects = {UUID(value) for value in (before["project_id"], after["project_id"]) if value}
-            for project_id in sorted(projects, key=str):
-                mark_dirty(session, project_id, settings, origin_key="task:" + str(change_id),
-                           source_id=task.source_id, task_id=task.id, command_source_id=command_source_id,
-                           event_type="task_change")
+        record_task_change(session, task, command_source_id, command.action, before, answer, settings)
         return answer

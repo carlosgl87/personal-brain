@@ -117,6 +117,8 @@ def process_update(client, telegram, api_url, token, user_id, update, processing
         return
     label = (extraction or {}).get("project_name") or result.get("project_name") or "sin proyecto identificado"
     receipt = ("Audio original guardado: " if result.get("media_type") == "audio" else "Nota guardada: ") + label + ".\nFuente: " + result["source_id"]
+    if result.get("task_completion_answer"):
+        receipt += "\n" + result["task_completion_answer"]
     if processing:
         if extraction is None:
             receipt += "\nProcesamiento pendiente; la fuente original se conserva."

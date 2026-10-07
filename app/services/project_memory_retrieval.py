@@ -53,7 +53,8 @@ def retrieve_project_memories(session, scope, settings, limit=30):
                                        "owner": task.owner_text, "due_at": task.due_at.isoformat() if task.due_at else None} if task else None,
                                    "source_id": str(event.command_source_id), "project_id": str(state.project_id),
                                    "task_id": str(event.task_id), "event_type": event.event_type,
-                                   "note": "Cambio manual posterior a la memoria; prioriza estado SQL actual."})
+                                   "action": change.action if change else None,
+                                   "note": "Cambio de tarea posterior a la memoria; prioriza estado SQL actual."})
             warnings.append("Memoria de " + name + " pendiente de actualizacion; se incorpora delta y estado SQL vigente.")
             if len(events) > 15:
                 warnings.append("Delta limitado a eventos recientes; cobertura parcial.")

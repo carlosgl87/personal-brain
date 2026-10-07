@@ -4,6 +4,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 from app.services.normalization import normalize
 from app.services.reasoning_llm import call_json
+from app.services.task_completion import has_completion_signal
 
 PROMPT_VERSION = 'intent-router-v1'
 AMBIGUOUS_REPLY = ('No estoy seguro si quieres guardar esto como nota o hacer una consulta.\n'
@@ -53,6 +54,8 @@ def deterministic_intent(text):
         return 'query'
     if re.match(r'^que\s+(?:tengo|tenemos|hay|paso|dijo|decidimos|se|es|son|proyectos|pendientes|debo|necesito|hago)\b', value):
         return 'query'
+    if has_completion_signal(raw):
+        return 'new_information'
     if re.match(r'^(?:nota\b|hoy (?:hable|hablamos|acordamos|quedamos)\b)', value):
         return 'new_information'
     if re.match(r'^(?:quiero|necesito|puedes|podrias|consulta)\b', value):

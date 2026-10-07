@@ -25,3 +25,5 @@ from app.models.project_memory import ProjectMemoryVersion, ProjectMemoryState, 
 from app.models.document_asset import DocumentAsset
 from app.models.source_processing_job import SourceProcessingJob
 __all__ += ["DocumentAsset", "SourceProcessingJob"]
+from app.models.task_completion_attempt import TaskCompletionAttempt
+__all__ += ["TaskCompletionAttempt"]

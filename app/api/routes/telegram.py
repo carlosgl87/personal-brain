@@ -11,6 +11,7 @@ from app.database import get_session
 from app.services.telegram_ingestion import authorized_message, ingest_update
 from app.services.queries import answer_query, parse_query
 from app.services.task_management import edit_task, parse_task_command
+from app.services.task_completion import complete_from_note, has_completion_signal
 from app.services.audio import AudioError, authorized_audio, ingest_audio
 from app.services.reasoning import answer_reasoning, reasoning_question
 from app.services.memory import maybe_index
@@ -97,6 +98,10 @@ def receive_update(
     if intent == "new_information":
         saved = ingest_update(session, update, user_id)
         if saved["status"] in {"saved", "duplicate"}:
+            if has_completion_signal(raw):
+                completion_answer = complete_from_note(session, UUID(saved["source_id"]), settings)
+                if completion_answer:
+                    saved["task_completion_answer"] = completion_answer
             maybe_index(session, UUID(saved["source_id"]), settings)
         return saved
     saved = ingest_update(session, update, user_id, is_query=True)

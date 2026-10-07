@@ -224,7 +224,7 @@ class ProjectMemoryTests(unittest.TestCase):
             SimpleNamespace(all=lambda: [(SimpleNamespace(id=sid, received_at=NOW,
                 raw_content='Dashboard completado.'), SimpleNamespace(id=uuid4(), result={'summary': 'Completado.'}))])]
         session.scalars.return_value.all.return_value = [event]
-        session.get.side_effect = lambda model, identifier: SimpleNamespace(before={'status': 'open'}, after={'status': 'completed'}) if model is TaskChange else SimpleNamespace(title='Dashboard', completed_at=NOW, status='completed', project_id=item.project_id, owner_text='Ana', due_at=None)
+        session.get.side_effect = lambda model, identifier: SimpleNamespace(before={'status': 'open'}, after={'status': 'completed'}, action='completar') if model is TaskChange else SimpleNamespace(title='Dashboard', completed_at=NOW, status='completed', project_id=item.project_id, owner_text='Ana', due_at=None)
         scope = Scope(None if global_scope else [item.project_id], 'SIMA')
         return session, scope, sid, command_id
 
