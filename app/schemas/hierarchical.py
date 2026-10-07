@@ -2,6 +2,8 @@ from typing import Literal
 from pydantic import Field, model_validator
 from app.schemas.extraction import StrictModel
 from app.schemas.extraction import Extraction, ExtractedTask, ExtractedDecision
+from app.schemas.extraction import ExtractedUpdate
+from app.schemas.action_plan import ActionPlan
 
 
 class ConsolidatedTask(ExtractedTask):
@@ -9,6 +11,10 @@ class ConsolidatedTask(ExtractedTask):
 
 
 class ConsolidatedDecision(ExtractedDecision):
+    candidate_ids: list[str] = Field(min_length=1, max_length=100)
+
+
+class ConsolidatedUpdate(ExtractedUpdate):
     candidate_ids: list[str] = Field(min_length=1, max_length=100)
 
 
@@ -32,3 +38,11 @@ class ConsolidatedExtraction(Extraction):
     dispositions: list[CandidateDisposition] = Field(max_length=1000)
     tasks: list[ConsolidatedTask]
     decisions: list[ConsolidatedDecision]
+    updates: list[ConsolidatedUpdate] = Field(default_factory=list)
+
+
+class ConsolidatedActionPlan(ActionPlan):
+    dispositions: list[CandidateDisposition] = Field(max_length=1000)
+    tasks: list[ConsolidatedTask]
+    decisions: list[ConsolidatedDecision]
+    updates: list[ConsolidatedUpdate] = Field(default_factory=list)

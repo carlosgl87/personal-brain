@@ -50,7 +50,7 @@ def context_size(context):
 
 
 def bound_context(context, plan, limits, max_chars):
-    keys = ("tasks", "decisions", "chunks", "recent_sources", "projects", "project_memories", "new_sources")
+    keys = ("tasks", "decisions", "updates", "chunks", "recent_sources", "projects", "project_memories", "new_sources")
     original = {key: list(context.get(key, [])) for key in keys}
     result = {key: value for key, value in context.items() if key not in keys}
     result["warnings"] = list(context["warnings"])
@@ -63,8 +63,8 @@ def bound_context(context, plan, limits, max_chars):
     reserve = 1200
     ordered = [("new_sources", item) for item in original["new_sources"]]
     ordered += [("project_memories", item) for item in original["project_memories"]]
-    for index in range(max(len(original["tasks"]), len(original["decisions"]))):
-        for key in ("tasks", "decisions"):
+    for index in range(max(len(original[k]) for k in ("tasks", "decisions", "updates"))):
+        for key in ("tasks", "decisions", "updates"):
             if index < len(original[key]):
                 ordered.append((key, original[key][index]))
     ordered += [(key, item) for key in ("chunks", "recent_sources", "projects") for item in original[key]]

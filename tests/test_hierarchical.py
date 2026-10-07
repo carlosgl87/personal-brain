@@ -423,7 +423,7 @@ class HierarchicalTests(unittest.TestCase):
     def test_additive_migration_new_tables_checks_and_immutable_history(self):
         buffer = io.StringIO()
         with patch("app.config.get_settings", return_value=config(DATABASE_URL="postgresql://offline/db")):
-            command.upgrade(Config("alembic.ini", output_buffer=buffer), "0006_memory_reasoning:head", sql=True)
+            command.upgrade(Config("alembic.ini", output_buffer=buffer), "0006_memory_reasoning:0011_task_completion_attempts", sql=True)
         sql = buffer.getvalue()
         for table in ("processing_run_parts", "task_evidence", "decision_evidence"):
             self.assertIn("CREATE TABLE " + table, sql)

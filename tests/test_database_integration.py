@@ -27,6 +27,8 @@ from app.services.queries import Scope, task_statement, source_statement
 from app.services.memory import index_source, semantic_search
 from app.services.task_management import TaskCommand, edit_task
 from app.models import TaskCompletionAttempt
+from app.models import ProjectUpdate, UpdateEvidence, ProcessingRunPart
+from app.schemas.action_plan import ActionPlan
 from app.services.task_completion import CompletionProposal, complete_from_note
 from test_hierarchical import config, output, QUOTE, FakeClaude
 from test_project_memory import memory
@@ -47,7 +49,7 @@ class DatabaseIntegrationTests(unittest.TestCase):
             connect_args={"prepare_threshold":None} if pglite else {},
             **({"pool_size":1,"max_overflow":0} if pglite else {}))
         with cls.engine.connect() as conn:
-            if conn.scalar(text('SELECT version_num FROM alembic_version')) != '0011_task_completion_attempts':
+            if conn.scalar(text('SELECT version_num FROM alembic_version')) != '0012_action_plans':
                 raise ValueError('Apply the current migrations to the disposable database first.')
         with Session(cls.engine) as session,session.begin(): seed(session)
 
@@ -86,6 +88,67 @@ class DatabaseIntegrationTests(unittest.TestCase):
             seed(session); seed(session)
             self.assertEqual(session.scalar(select(func.count(Project.id))),before)
             self.assertGreaterEqual(before,32)
+
+    def test_action_plan_multiple_changes_and_updates_commit_once(self):
+        from test_action_plans import plan, completion
+        original = self.save_source(self.a)
+        first, second = uuid4(), uuid4()
+        with Session(self.engine) as session, session.begin():
+            session.add_all([Task(id=first, source_id=original, project_id=self.a, title='Enviar correos', status='open'),
+                             Task(id=second, source_id=original, project_id=self.a, title='Terminar presentación', status='open')])
+        quote = 'Ya envié los correos y terminé la presentación.'
+        note = self.save_source(content=quote, source_type='telegram_text', metadata={'processing_schema': 'action-plan-v1'})
+        with Session(self.engine) as session:
+            proposal = plan(self.a, completed_tasks=[completion(session.get(Task, tid), quote) for tid in (first, second)],
+                            updates=[{'update_text': 'Correos enviados y presentación terminada.', 'evidence': quote}])
+        with patch('app.services.message_interpreter.interpret', return_value=proposal) as llm:
+            with Session(self.engine) as session: process_text_source(session, note, self.cfg)
+            with Session(self.engine) as session: process_text_source(session, note, self.cfg)
+        llm.assert_called_once()
+        with Session(self.engine) as session:
+            changes = session.scalars(select(TaskChange).where(TaskChange.command_source_id == note)).all()
+            self.assertEqual(len(changes), 2)
+            self.assertEqual({c.task_id for c in changes}, {first, second})
+            self.assertTrue(all(c.action == 'natural_completion' for c in changes))
+            self.assertEqual(session.scalar(select(func.count(ProjectUpdate.id)).where(ProjectUpdate.source_id == note)), 1)
+            self.assertEqual(session.scalar(select(func.count(TaskCompletionAttempt.id)).where(TaskCompletionAttempt.source_id == note)), 0)
+            self.assertTrue(session.get(ProjectMemoryState, self.a).is_dirty)
+            self.assertEqual(session.get(Source, note).raw_content, quote)
+        with self.assertRaises(DBAPIError), Session(self.engine) as session, session.begin():
+            session.add(TaskChange(task_id=first, command_source_id=note, action='natural_completion', before={}, after={}, answer='duplicate'))
+            session.flush()
+
+    def test_updates_and_evidence_foreign_keys_offsets_and_immutability(self):
+        source_id = self.save_source(self.a, 'Datos validados.')
+        run_id, update_id, chunk_id, part_id = uuid4(), uuid4(), uuid4(), uuid4()
+        with Session(self.engine) as session, session.begin():
+            session.add(ProcessingRun(id=run_id, source_id=source_id, provider='anthropic', model='test',
+                                     prompt_version='message-interpreter-v1', result={'schema_version': 'action-plan-v1'}))
+            session.add(SourceChunk(id=chunk_id, source_id=source_id, chunk_version='test', chunk_index=0,
+                                    content='Datos validados.', char_start=0, char_end=16, chunk_metadata={}))
+            session.flush()
+            session.add(ProcessingRunPart(id=part_id, source_id=source_id, source_chunk_id=chunk_id,
+                chunk_version='test', part_index=0, provider='anthropic', model='test', prompt_version='action-plan-part-v1', result={}))
+            session.add(ProjectUpdate(id=update_id, source_id=source_id, processing_run_id=run_id,
+                                      project_id=self.a, update_text='Datos validados.'))
+            session.flush()
+            session.add(UpdateEvidence(update_id=update_id, source_chunk_id=chunk_id, processing_run_part_id=part_id,
+                                       evidence='Datos validados.', char_start=0, char_end=16))
+        for statement in ["UPDATE project_updates SET update_text='changed' WHERE id=:id", 'DELETE FROM project_updates WHERE id=:id']:
+            with self.assertRaises(DBAPIError), self.engine.begin() as conn:
+                conn.execute(text(statement), {'id': update_id})
+        with self.assertRaises(DBAPIError), Session(self.engine) as session, session.begin():
+            session.add(ProjectUpdate(source_id=uuid4(), processing_run_id=run_id, project_id=self.a, update_text='bad FK'))
+            session.flush()
+        with self.assertRaises(DBAPIError), Session(self.engine) as session, session.begin():
+            session.add(UpdateEvidence(update_id=update_id, source_chunk_id=chunk_id, processing_run_part_id=part_id,
+                                       evidence='bad offsets', char_start=10, char_end=5))
+            session.flush()
+        with Session(self.engine) as session:
+            update = session.get(ProjectUpdate, update_id)
+            self.assertEqual(update.update_text, 'Datos validados.')
+            evidence = session.scalar(select(UpdateEvidence).where(UpdateEvidence.update_id == update_id))
+            self.assertEqual(session.get(Source, source_id).raw_content[evidence.char_start:evidence.char_end], evidence.evidence)
 
     def natural_completion_fixture(self):
         original = self.save_source(self.a)

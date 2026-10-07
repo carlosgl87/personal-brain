@@ -8,7 +8,7 @@ from uuid import UUID, uuid4
 from sqlalchemy import select, text, or_, and_
 from sqlalchemy.orm import Session
 from app.models import (Project, ProjectMemoryState, ProjectMemoryVersion, ProjectMemoryEvent,
-                        Source, Task, Decision, TaskChange)
+                        Source, Task, Decision, TaskChange, ProjectUpdate)
 from app.services.queries import Scope, current_derived, source_statement, decision_statement
 from app.services.project_memory_llm import (INCREMENTAL_PROMPT, RECONCILIATION_PROMPT,
                                             generate_memory)
@@ -83,6 +83,14 @@ def snapshot_data(session, project_id, settings, reconciliation=False):
                       "decided_at": item.decided_at.isoformat() if item.decided_at else None}
                      for item, _ in decisions[:40]]
     event_data = []
+    update_statement = select(ProjectUpdate).join(Source, Source.id == ProjectUpdate.source_id).where(
+        ProjectUpdate.project_id == project_id, current_derived(ProjectUpdate))
+    if source_ids and not reconciliation:
+        update_statement = update_statement.where(ProjectUpdate.source_id.in_(source_ids))
+    updates = session.scalars(update_statement.order_by(ProjectUpdate.created_at.desc(), ProjectUpdate.id).limit(41)).all()
+    update_data = [{"update_id": str(u.id), "source_id": str(u.source_id), "text": u.update_text[:1500],
+                   "text_truncated": len(u.update_text) > 1500,
+                   "event_at": u.event_at.isoformat() if u.event_at else None} for u in updates[:40]]
     for event in changes:
         item = {"revision": event.revision, "event_type": event.event_type,
                 "source_id": str(event.source_id) if event.source_id else None,
@@ -97,9 +105,9 @@ def snapshot_data(session, project_id, settings, reconciliation=False):
         event_data.append(item)
     data = {"project": {"id": str(project.id), "name": project.name},
             "previous_memory": previous.memory if previous else None,
-            "sources": sources, "tasks": task_data, "decisions": decision_data,
+            "sources": sources, "tasks": task_data, "decisions": decision_data, "updates": update_data,
             "changes": event_data, "chunks": [], "warnings": []}
-    if len(rows) > settings.project_memory_incremental_max_sources or len(tasks) > 60 or len(decisions) > 40:
+    if len(rows) > settings.project_memory_incremental_max_sources or len(tasks) > 60 or len(decisions) > 40 or len(updates) > 40:
         data["warnings"].append("Recuperacion limitada; no implica toda la historia.")
     if reconciliation and source_ids:
         history = session.execute(source_statement(scope).where(Source.id.not_in(source_ids))
@@ -135,6 +143,7 @@ def memory_trace(data):
             "history_source_ids": [item["source_id"] for item in data.get("history_sources", [])],
             "task_ids": [item["task_id"] for item in data["tasks"]],
             "decision_ids": [item["decision_id"] for item in data["decisions"]],
+            "update_ids": [item["update_id"] for item in data.get("updates", [])],
             "chunk_ids": [item["chunk_id"] for item in data["chunks"]],
             "event_revisions": [item["revision"] for item in data["changes"]],
             "warnings": data["warnings"]}
@@ -199,7 +208,7 @@ def refresh_project(engine, project_id, settings, reconciliation=False, force=Fa
                             return False
                         failure_guard = (state.current_version_id, state.change_revision)
                         captured, data = snapshot_data(session, project_id, settings, reconciliation)
-                    has_evidence = any(data[key] for key in ("sources", "tasks", "decisions", "chunks")) or bool(data.get("history_sources")) or bool(data["previous_memory"])
+                    has_evidence = any(data.get(key) for key in ("sources", "tasks", "decisions", "updates", "chunks")) or bool(data.get("history_sources")) or bool(data["previous_memory"])
                     if not has_evidence:
                         with session.begin():
                             state = session.scalar(select(ProjectMemoryState).where(ProjectMemoryState.project_id == project_id)

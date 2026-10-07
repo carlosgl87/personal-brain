@@ -40,7 +40,7 @@ def generate_memory(settings, data, reconciliation=False, client=None):
     system += "\nJSON completo <= " + str(settings.project_memory_max_chars) + " caracteres; cada seccion <= 3000 caracteres y <= 30 fuentes relevantes. No acumules referencias historicas innecesarias."
     result = call_json(settings, system, data, ProjectMemoryContent, client, max_tokens=6000)
     allowed = memory_references(data.get("previous_memory") or {})
-    allowed |= {item["source_id"] for key in ("sources", "history_sources", "tasks", "decisions", "chunks")
+    allowed |= {item["source_id"] for key in ("sources", "history_sources", "tasks", "decisions", "updates", "chunks")
                 for item in data.get(key, []) if item.get("source_id")}
     allowed |= {item["command_source_id"] for item in data.get("changes", []) if item.get("command_source_id")}
     allowed |= {item["source_id"] for item in data.get("changes", [])

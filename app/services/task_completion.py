@@ -161,7 +161,8 @@ def complete_from_note(session, source_id, settings):
         cached = session.scalar(select(TaskCompletionAttempt).where(TaskCompletionAttempt.source_id == source.id))
         if cached is not None:
             return cached.answer
-        previous = session.scalar(select(TaskChange).where(TaskChange.command_source_id == source.id))
+        previous = session.scalar(select(TaskChange).where(TaskChange.command_source_id == source.id)
+                                  .order_by(TaskChange.created_at, TaskChange.id).limit(1))
         if previous is not None:
             return previous.answer
         text = source.raw_content

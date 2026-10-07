@@ -27,3 +27,5 @@ from app.models.source_processing_job import SourceProcessingJob
 __all__ += ["DocumentAsset", "SourceProcessingJob"]
 from app.models.task_completion_attempt import TaskCompletionAttempt
 __all__ += ["TaskCompletionAttempt"]
+from app.models.project_update import ProjectUpdate, UpdateEvidence
+__all__ += ["ProjectUpdate", "UpdateEvidence"]

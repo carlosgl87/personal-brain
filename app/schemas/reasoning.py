@@ -12,6 +12,7 @@ class QueryPlan(StrictModel):
     time_basis: Literal["source_date", "due_date", "decision_date", "created_date", "mixed", "none"] = "source_date"
     include_tasks: StrictBool = True
     include_decisions: StrictBool = True
+    include_updates: StrictBool = True
     include_recent_sources: StrictBool = True
     include_completed_tasks: StrictBool = False
     retrieval_depth: Literal["focused", "normal", "broad"] = "normal"

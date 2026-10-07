@@ -123,6 +123,8 @@ def process_update(client, telegram, api_url, token, user_id, update, processing
         if extraction is None:
             receipt += "\nProcesamiento pendiente; la fuente original se conserva."
         else:
+            if extraction.get("action_plan") and extraction.get("answer"):
+                receipt += "\n" + extraction["answer"]
             if extraction.get("transcript_source_id"):
                 receipt += "\nTranscripción: " + extraction["transcript_source_id"]
             receipt += ("\nTareas: " + str(extraction["tasks_count"])

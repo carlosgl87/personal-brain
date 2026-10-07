@@ -59,12 +59,15 @@ def stage_status(source, status):
         source.processing_status = status
 
 
-def process_hierarchical(session, source_id, settings, force=False, refresh_parts=False):
+def process_hierarchical(session, source_id, settings, force=False, refresh_parts=False, action_plan=False):
     from app.services.processing import SourceNotProcessable, run_result
     _, model = settings.llm_credentials()
+    if action_plan and not force:
+        raise SourceNotProcessable("--action-plan requiere un reprocesamiento explícito de una fuente.")
     if not settings.hierarchical_extraction_enabled:
         raise SourceNotProcessable("Extraccion jerarquica deshabilitada; fuente completa conservada.")
     generation_id = None
+    part_prompt = PART_PROMPT_VERSION
     try:
         with session.begin():
             source = checked_source(session, source_id, force)
@@ -74,6 +77,10 @@ def process_hierarchical(session, source_id, settings, force=False, refresh_part
             if refresh_parts and not force:
                 raise SourceNotProcessable("--refresh-parts requiere --reprocess.")
             snapshot = source_snapshot(source)
+            if action_plan or source.raw_metadata.get("processing_schema") == "action-plan-v1":
+                part_prompt = "action-plan-part-v1"
+                # Runtime snapshot only: never rewrite original Source metadata.
+                snapshot.raw_metadata = snapshot.raw_metadata | {"processing_schema": "action-plan-v1"}
             version = ensure_source_chunks(session, source, settings)
             chunks = session.scalars(select(SourceChunk).where(SourceChunk.source_id == source_id,
                 SourceChunk.chunk_version == version).order_by(SourceChunk.chunk_index)).all()
@@ -81,12 +88,12 @@ def process_hierarchical(session, source_id, settings, force=False, refresh_part
             if refresh_parts:
                 generation = session.scalar(select(ExtractionGeneration).where(
                     ExtractionGeneration.source_id == source_id, ExtractionGeneration.chunk_version == version,
-                    ExtractionGeneration.model == model, ExtractionGeneration.prompt_version == PART_PROMPT_VERSION,
+                    ExtractionGeneration.model == model, ExtractionGeneration.prompt_version == part_prompt,
                     ExtractionGeneration.previous_run_id == previous_run_id,
                     ExtractionGeneration.status.in_(["pending", "failed"])).order_by(ExtractionGeneration.created_at.desc()).limit(1))
                 if generation is None:
                     generation = ExtractionGeneration(id=uuid4(), source_id=source_id, chunk_version=version,
-                        model=model, prompt_version=PART_PROMPT_VERSION, previous_run_id=previous_run_id, status="pending")
+                        model=model, prompt_version=part_prompt, previous_run_id=previous_run_id, status="pending")
                     session.add(generation)
                     session.flush()
                 generation_id = generation.id
@@ -105,7 +112,7 @@ def process_hierarchical(session, source_id, settings, force=False, refresh_part
                 part = session.scalar(select(ProcessingRunPart).where(
                     ProcessingRunPart.source_id == source_id, ProcessingRunPart.source_chunk_id == chunk_id,
                     ProcessingRunPart.chunk_version == version, ProcessingRunPart.model == model,
-                    ProcessingRunPart.prompt_version == PART_PROMPT_VERSION))
+                    ProcessingRunPart.prompt_version == part_prompt))
                 refreshed = None
                 if generation_id is not None:
                     refreshed = session.scalar(select(GenerationPart).where(
@@ -120,7 +127,7 @@ def process_hierarchical(session, source_id, settings, force=False, refresh_part
                     if part is None:
                         part = ProcessingRunPart(id=uuid4(), source_id=source_id, source_chunk_id=chunk_id,
                             chunk_version=version, part_index=index, provider="anthropic", model=model,
-                            prompt_version=PART_PROMPT_VERSION, result=result)
+                            prompt_version=part_prompt, result=result)
                         session.add(part)
                         session.flush()
                     if generation_id is not None:
@@ -145,6 +152,24 @@ def process_hierarchical(session, source_id, settings, force=False, refresh_part
             projects = session.scalars(select(Project).where(
                 Project.status == "active", Project.archived_at.is_(None)).options(
                     selectinload(Project.aliases), selectinload(Project.area), selectinload(Project.company))).all()
+            if action_plan or source.raw_metadata.get("processing_schema") == "action-plan-v1":
+                from app.services.action_context import assemble_context
+                from app.services.action_execution import execute_plan
+                context = assemble_context(session, source, projects, settings, include_message=False)
+                result, provenance = consolidate(settings, snapshot, parts, projects, context=context)
+                run = execute_plan(session, source, result, context, settings,
+                    "action-plan-consolidation-v1", provenance=provenance, metadata={
+                        "extraction_mode": "hierarchical", "chunk_version": version,
+                        "partial_prompt_version": "action-plan-part-v1", "part_ids": [str(p.id) for p in parts],
+                        "generation_id": str(generation_id) if generation_id else None,
+                        "candidate_dispositions": provenance["dispositions"]})
+                for affected_id in sorted(affected - {source.primary_project_id}, key=str):
+                    mark_dirty(session, affected_id, settings, origin_key="run:" + str(run.id), source_id=source_id,
+                               event_type="source_revision")
+                if generation_id:
+                    generation = session.get(ExtractionGeneration, generation_id)
+                    generation.status, generation.completed_at = "processed", datetime.now(timezone.utc)
+                return run_result(run)
             result, provenance = consolidate(settings, snapshot, parts, projects)
             matched = match_source_project(source, projects)
             project_id = source.primary_project_id
@@ -153,7 +178,7 @@ def process_hierarchical(session, source_id, settings, force=False, refresh_part
             result.project_id = project_id
             stored = result.model_dump(mode="json") | {
                 "extraction_mode": "hierarchical", "chunk_version": version,
-                "partial_prompt_version": PART_PROMPT_VERSION,
+                "partial_prompt_version": part_prompt,
                 "part_ids": [str(part.id) for part in parts],
                 "generation_id": str(generation_id) if generation_id else None,
                 "candidate_dispositions": provenance["dispositions"]}

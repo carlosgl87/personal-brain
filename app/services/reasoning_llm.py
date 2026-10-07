@@ -38,6 +38,8 @@ Si falta evidencia, dilo. No afirmes que conoces todas las notas: hay límites y
 Prioriza notas recientes ante contradicciones, identifica fechas y reconoce contradicciones.
 Project Memories son derivados versionados: prioriza new_sources y estado SQL vigente ante memoria obsoleta.
 Los resúmenes son derivados; el texto de los chunks es evidencia original.
+Updates son hechos derivados, no citas primarias: para una cita exacta usa original_excerpt
+o chunks/Sources originales. Conserva fuente y fecha; nunca cites un update como texto original.
 Incluye en source_ids únicamente UUIDs de fuentes usados. No incluyas UUIDs de tareas como fuentes.
 Da una respuesta útil y sintética. Si hay advertencias de recuperación, reconoce sus límites."""
 
@@ -97,7 +99,7 @@ def plan_question(question, catalog, now, settings, client=None):
 def synthesize(question, context, settings, client=None):
     result = call_json(settings, SYNTHESIS_SYSTEM, {"question": question, "evidence": context},
                        SynthesizedAnswer, client)
-    allowed = {item["source_id"] for key in ("tasks", "decisions", "recent_sources", "chunks", "new_sources")
+    allowed = {item["source_id"] for key in ("tasks", "decisions", "updates", "recent_sources", "chunks", "new_sources")
                for item in context.get(key, []) if item.get("source_id")}
     allowed.update(source_id for item in context.get("project_memories", []) for source_id in item["source_ids"])
     ids = {str(source_id) for source_id in result.source_ids}

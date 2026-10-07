@@ -2,7 +2,9 @@
 import hashlib
 import json
 from app.schemas.extraction import Extraction
-from app.schemas.hierarchical import ConsolidatedExtraction
+from app.schemas.hierarchical import ConsolidatedExtraction, ConsolidatedActionPlan
+from app.schemas.action_plan import ActionPlan
+from app.services.message_interpreter import SYSTEM as INTERPRETER_SYSTEM
 from app.services.claude import ExtractionError, SYSTEM_PROMPT
 from app.services.normalization import normalize
 from app.services.reasoning_llm import ReasoningError, call_json
@@ -53,7 +55,7 @@ def validate_partial(result, source, chunk):
     if source.raw_content[chunk.char_start:chunk.char_end] != chunk.content:
         raise ExtractionError("Offsets del chunk no coinciden con la fuente original.")
     evidence = {key: [evidence_locations(chunk, item.evidence) for item in getattr(result, key)]
-                for key in ("tasks", "decisions")}
+                for key in ("tasks", "decisions", "updates")}
     return {"extraction": result.model_dump(mode="json"), "evidence": evidence,
             "chunk_sha256": hashlib.sha256(chunk.content.encode()).hexdigest()}
 
@@ -66,6 +68,8 @@ def extract_part(settings, source, chunk, client=None):
             "original_date_unix": message.get("date"), "timezone": "America/Lima",
             "project_id": str(source.primary_project_id) if source.primary_project_id else None}
     system = SYSTEM_PROMPT + "\nExtrae solo este fragmento. project_id debe ser exactamente el recibido, incluso null. No asignes proyectos por fragmento."
+    if source.raw_metadata.get("processing_schema") == "action-plan-v1":
+        system = INTERPRETER_SYSTEM + "\nEste es un parcial: devuelve Extraction, solo updates, tasks nuevas y decisions. No completes tareas ni respondas consultas aquí. project_id debe ser exactamente el recibido, incluso null."
     try:
         result = call_json(settings, system, data, Extraction, client,
                            max_tokens=settings.hierarchical_part_max_tokens)
@@ -77,11 +81,13 @@ def extract_part(settings, source, chunk, client=None):
 def candidate_key(kind, item):
     if kind == "tasks":
         return (normalize(item["title"]), normalize(item.get("owner_text") or ""), item.get("due_at"))
+    if kind == "updates":
+        return (normalize(item["update_text"]), item.get("event_at"))
     return (normalize(item["decision_text"]), item.get("decided_at"))
 
 
 def consolidation_input(source, parts, projects, settings):
-    candidates = {"tasks": {}, "decisions": {}}
+    candidates = {"tasks": {}, "decisions": {}, "updates": {}}
     summaries = []
     extra = {key: [] for key in ("people", "dates", "follow_ups", "tags")}
     for part in parts:
@@ -116,21 +122,23 @@ def validate_consolidation(result, candidates, source, projects):
     allowed = {p.id for p in projects}
     if result.project_id is not None and result.project_id not in allowed | {source.primary_project_id}:
         raise ExtractionError("Proyecto consolidado fuera del catalogo.")
-    if source.primary_project_id is not None and result.project_id != source.primary_project_id:
+    if source.primary_project_id is not None and result.project_id != source.primary_project_id and not isinstance(result, ConsolidatedActionPlan):
         raise ExtractionError("La consolidacion no puede reemplazar el proyecto identificado.")
-    all_candidates = set(candidates["tasks"]) | set(candidates["decisions"])
+    kinds = ("tasks", "decisions", "updates")
+    candidates = {kind: candidates.get(kind, {}) for kind in kinds}
+    all_candidates = set().union(*(set(candidates[kind]) for kind in kinds))
     dispositions = {d.candidate_id: d for d in result.dispositions}
     if len(dispositions) != len(result.dispositions) or set(dispositions) != all_candidates:
         raise ExtractionError("Todos los candidatos requieren una disposition unica.")
-    for kind in ("tasks", "decisions"):
+    for kind in kinds:
         for ref in candidates[kind]:
             disposition = dispositions[ref]
             if disposition.status != "rejected" and disposition.final_index >= len(getattr(result, kind)):
                 raise ExtractionError("Disposition apunta fuera de los items finales.")
-    provenance = {"tasks": [], "decisions": [],
+    provenance = {"tasks": [], "decisions": [], "updates": [],
                   "dispositions": [d.model_dump(mode="json") for d in result.dispositions]}
     output = result.model_dump(mode="json", exclude={"dispositions"})
-    for kind in ("tasks", "decisions"):
+    for kind in kinds:
         final, final_locations, keys, covered = [], [], {}, set()
         for final_index, item in enumerate(output[kind]):
             refs = item.pop("candidate_ids")
@@ -143,7 +151,7 @@ def validate_consolidation(result, candidates, source, projects):
             matches = [candidates[kind][ref] for ref in refs]
             if not item["evidence"].strip() or item["evidence"] not in {c["evidence"] for c in matches}:
                 raise ExtractionError("Evidencia consolidada no fundamentada.")
-            fields = ("owner_text", "due_at") if kind == "tasks" else ("decided_at",)
+            fields = ("owner_text", "due_at") if kind == "tasks" else (("event_at",) if kind == "updates" else ("decided_at",))
             for field in fields:
                 available = {c.get(field) for c in matches}
                 if item.get(field) not in available:
@@ -181,13 +189,22 @@ def validate_consolidation(result, candidates, source, projects):
     # Preserve all extracted ancillary facts even if the consolidator forgot some.
     for key in ("people", "dates", "follow_ups", "tags"):
         output[key] = list(dict.fromkeys(output[key]))
-    return Extraction.model_validate(output), provenance
+    schema = ActionPlan if isinstance(result, ConsolidatedActionPlan) else Extraction
+    return schema.model_validate(output), provenance
 
 
-def consolidate(settings, source, parts, projects, client=None):
+def consolidate(settings, source, parts, projects, client=None, context=None):
     data, candidates = consolidation_input(source, parts, projects, settings)
+    new = source.raw_metadata.get("processing_schema") == "action-plan-v1"
+    system, schema = CONSOLIDATION_SYSTEM, ConsolidatedExtraction
+    if new:
+        data["interpretation_context"] = context
+        system = INTERPRETER_SYSTEM + "\nConsolida los parciales como un ActionPlan. Cada task, decision y update debe referenciar candidate_ids de su categoría, con evidencia literal de un candidato. Incluye todos los candidatos que fundamentan cada item. Clasifica TODOS los candidatos mediante dispositions kept, merged o rejected; final_index base cero en la categoría correspondiente, o null y reason si rechazado. No combines tareas de estado independiente. Fechas y responsables solo de candidatos referenciados. Las completions usan exclusivamente open_tasks del contexto y evidencia literal conservada en los parciales."
+        schema = ConsolidatedActionPlan
+        if len(json.dumps(data, ensure_ascii=False)) > settings.hierarchical_consolidation_max_chars:
+            raise ExtractionError("Consolidación y contexto exceden presupuesto; parciales conservados.")
     try:
-        result = call_json(settings, CONSOLIDATION_SYSTEM, data, ConsolidatedExtraction, client,
+        result = call_json(settings, system, data, schema, client,
                            max_tokens=settings.hierarchical_consolidation_max_tokens)
         for key in ("people", "dates", "follow_ups", "tags"):
             if any(value not in data[key] for value in getattr(result, key)):

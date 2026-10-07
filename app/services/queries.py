@@ -173,6 +173,10 @@ def current_source():
         parent.latest_transcript_source_id == Source.id,
     ).correlate(Source))
     return and_(
+        ~exists(select(ProcessingRun.id).where(
+            ProcessingRun.id == Source.latest_processing_run_id,
+            ProcessingRun.result["schema_version"].astext == "action-plan-v1",
+            ProcessingRun.result["interaction"].astext == "query").correlate(Source)),
         Source.latest_transcript_source_id.is_(None),
         or_(Source.parent_source_id.is_(None), current_transcript),
         or_(Source.source_type.not_in(["telegram_text", "audio_transcript"]), ~superseded),

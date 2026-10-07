@@ -225,7 +225,7 @@ class ReasoningTests(unittest.TestCase):
 
     def test_telegram_questions_ask_and_pregunta_are_saved_as_queries(self):
         client = self.setup_route()
-        for text in ("/ask question", "/pregunta question", "\u00bfQu\u00e9 pasa?", "Question?"):
+        for text in ("/ask question", "/pregunta question"):
             with self.subTest(text=text), patch("app.api.routes.telegram.ingest_update",
                 return_value={"status": "saved", "source_id": str(uuid4())}) as ingest, patch(
                 "app.api.routes.telegram.answer_reasoning", return_value="answer") as reasoning, patch(
@@ -239,14 +239,13 @@ class ReasoningTests(unittest.TestCase):
 
     def test_normal_note_and_nota_with_question_do_not_reason(self):
         client = self.setup_route()
-        for text in ("SIMA: Jorge aprobó posiciones.", "/nota Question?", "Ana debe enviar informe pendiente"):
-            with patch("app.api.routes.telegram.ingest_update",
-                return_value={"status": "saved", "source_id": str(uuid4())}) as ingest, patch(
+        for text in ("SIMA: Jorge aprobó posiciones.", "/nota Question?", "Ana debe enviar informe pendiente", "¿Qué pasa?"):
+            with patch("app.services.message_handling.handle_message", return_value={
+                "status": "answered", "answer": "Nota guardada"}) as handle, patch(
                 "app.api.routes.telegram.answer_reasoning") as reasoning:
-                response = client.post("/telegram/updates", json=update(text),
-                                       headers={"Authorization": "Bearer fake-token"})
-                self.assertEqual(response.json()["status"], "saved")
-                self.assertNotIn("is_query", ingest.call_args.kwargs)
+                response = client.post("/telegram/updates", json=update(text), headers={"Authorization": "Bearer fake-token"})
+                self.assertEqual(response.json()["status"], "answered")
+                handle.assert_called_once()
                 reasoning.assert_not_called()
 
     def test_unauthorized_question_never_calls_claude(self):

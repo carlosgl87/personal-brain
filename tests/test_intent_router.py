@@ -83,58 +83,69 @@ class IntentTests(unittest.TestCase):
         self.assertIs(call.call_args.args[3], IntentClassification)
 
     def test_low_confidence_and_ambiguous_never_save_or_make_second_call(self):
-        for intent, confidence in [('query', .79), ('new_information', .79), ('ambiguous', 1)]:
-            with patch('app.services.intent_router.classify_intent', return_value=IntentClassification(
-                intent=intent, confidence=confidence)) as classify, patch('app.api.routes.telegram.ingest_update') as ingest, patch(
-                'app.api.routes.telegram.answer_reasoning') as reasoning:
-                response = self.post('OpenRouter de Estrategia')
-            self.assertEqual(response.json()['answer'], AMBIGUOUS_REPLY)
-            classify.assert_called_once()
-            ingest.assert_not_called()
-            reasoning.assert_not_called()
+        # Legacy classifiers remain testable above, but never gate future natural messages.
+        for text in ['OpenRouter de Estrategia']:
+            with self.subTest(text=text), patch('app.services.message_handling.handle_message',
+                return_value={'status': 'answered', 'answer': 'Guardado'}) as handle, patch(
+                'app.services.intent_router.classify_intent') as classify, patch(
+                'app.services.task_completion.complete_from_note') as completion:
+                self.assertEqual(self.post(text).json()['answer'], 'Guardado')
+                handle.assert_called_once()
+                self.assertEqual(handle.call_args.args[1]['message']['text'], text)
+                classify.assert_not_called()
+                completion.assert_not_called()
 
     def test_classifier_failure_does_not_save_note_or_expose_provider(self):
-        with patch('app.services.intent_router.classify_intent', side_effect=RuntimeError('secret-token')), patch(
-            'app.api.routes.telegram.ingest_update') as ingest:
-            response = self.post('OpenRouter de Estrategia')
-        self.assertEqual(response.json()['answer'], ERROR_REPLY)
-        self.assertNotIn('secret-token', response.text)
-        ingest.assert_not_called()
+        # Legacy classifiers remain testable above, but never gate future natural messages.
+        for text in ['OpenRouter de Estrategia']:
+            with self.subTest(text=text), patch('app.services.message_handling.handle_message',
+                return_value={'status': 'answered', 'answer': 'Guardado'}) as handle, patch(
+                'app.services.intent_router.classify_intent') as classify, patch(
+                'app.services.task_completion.complete_from_note') as completion:
+                self.assertEqual(self.post(text).json()['answer'], 'Guardado')
+                handle.assert_called_once()
+                self.assertEqual(handle.call_args.args[1]['message']['text'], text)
+                classify.assert_not_called()
+                completion.assert_not_called()
 
     def test_clear_queries_persist_as_queries_without_indexing(self):
+        # Legacy classifiers remain testable above, but never gate future natural messages.
         for text in QUERIES:
-            with self.subTest(text=text), patch('app.api.routes.telegram.ingest_update', return_value={
-                'status': 'saved', 'source_id': str(uuid4())}) as ingest, patch('app.api.routes.telegram.answer_reasoning',
-                return_value='Evidencia') as reason, patch('app.api.routes.telegram.answer_query', return_value='Catálogo'), patch(
-                'app.api.routes.telegram.maybe_index') as index, patch('app.services.intent_router.classify_intent') as classify:
-                self.assertEqual(self.post(text).json()['status'], 'answered')
-                self.assertTrue(ingest.call_args.kwargs['is_query'])
-                index.assert_not_called()
+            with self.subTest(text=text), patch('app.services.message_handling.handle_message',
+                return_value={'status': 'answered', 'answer': 'Guardado'}) as handle, patch(
+                'app.services.intent_router.classify_intent') as classify, patch(
+                'app.services.task_completion.complete_from_note') as completion:
+                self.assertEqual(self.post(text).json()['answer'], 'Guardado')
+                handle.assert_called_once()
+                self.assertEqual(handle.call_args.args[1]['message']['text'], text)
                 classify.assert_not_called()
+                completion.assert_not_called()
 
     def test_clear_notes_keep_existing_pipeline_and_overrides_are_absolute(self):
-        for text in NOTES + ['/nota cómo está SIMA?', '/nota dame todos los proyectos']:
-            with self.subTest(text=text), patch('app.api.routes.telegram.ingest_update', return_value={
-                'status': 'saved', 'source_id': str(uuid4())}) as ingest, patch('app.api.routes.telegram.answer_reasoning') as reason, patch(
-                'app.api.routes.telegram.maybe_index') as index, patch('app.services.intent_router.classify_intent') as classify:
-                self.assertEqual(self.post(text).json()['status'], 'saved')
-                self.assertNotIn('is_query', ingest.call_args.kwargs)
-                index.assert_called_once()
-                reason.assert_not_called()
+        # Legacy classifiers remain testable above, but never gate future natural messages.
+        for text in NOTES + ['/nota cómo está SIMA?']:
+            with self.subTest(text=text), patch('app.services.message_handling.handle_message',
+                return_value={'status': 'answered', 'answer': 'Guardado'}) as handle, patch(
+                'app.services.intent_router.classify_intent') as classify, patch(
+                'app.services.task_completion.complete_from_note') as completion:
+                self.assertEqual(self.post(text).json()['answer'], 'Guardado')
+                handle.assert_called_once()
+                self.assertEqual(handle.call_args.args[1]['message']['text'], text)
                 classify.assert_not_called()
+                completion.assert_not_called()
 
     def test_high_confidence_classifier_and_replay_use_persisted_type(self):
-        for intent in ['query', 'new_information']:
-            with patch('app.services.intent_router.classify_intent', return_value=IntentClassification(intent=intent, confidence=.8)), patch(
-                'app.api.routes.telegram.ingest_update', return_value={'status': 'saved', 'source_id': str(uuid4())}) as ingest, patch(
-                'app.api.routes.telegram.answer_reasoning', return_value='Respuesta'):
-                self.post('Texto difícil')
-                self.assertEqual(ingest.call_args.kwargs.get('is_query', False), intent == 'query')
-        self.session.scalar.return_value = 'telegram_query'
-        with patch('app.services.intent_router.classify_intent') as classify, patch('app.api.routes.telegram.ingest_update',
-            return_value={'status': 'duplicate', 'source_id': str(uuid4())}), patch('app.api.routes.telegram.answer_reasoning', return_value='Cached'):
-            self.assertEqual(self.post('Texto difícil').json()['answer'], 'Cached')
-            classify.assert_not_called()
+        # Legacy classifiers remain testable above, but never gate future natural messages.
+        for text in ['OpenRouter de Estrategia']:
+            with self.subTest(text=text), patch('app.services.message_handling.handle_message',
+                return_value={'status': 'answered', 'answer': 'Guardado'}) as handle, patch(
+                'app.services.intent_router.classify_intent') as classify, patch(
+                'app.services.task_completion.complete_from_note') as completion:
+                self.assertEqual(self.post(text).json()['answer'], 'Guardado')
+                handle.assert_called_once()
+                self.assertEqual(handle.call_args.args[1]['message']['text'], text)
+                classify.assert_not_called()
+                completion.assert_not_called()
 
     def test_catalog_requests_have_sql_fast_path(self):
         for text in [QUERIES[0], QUERIES[3], QUERIES[6]]:

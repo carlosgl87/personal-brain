@@ -15,9 +15,12 @@ def main():
     parser.add_argument("--limit", type=int, default=10)
     parser.add_argument("--reprocess", action="store_true")
     parser.add_argument("--refresh-parts", action="store_true")
+    parser.add_argument("--action-plan", action="store_true", help="Usar el intérprete nuevo en un reprocesamiento explícito")
     args = parser.parse_args()
     if args.refresh_parts and not args.reprocess:
         parser.error("--refresh-parts requiere --reprocess y --source-id.")
+    if args.action_plan and not args.reprocess:
+        parser.error("--action-plan requiere --reprocess y --source-id.")
     if args.limit < 1 or args.limit > 100:
         parser.error("--limit debe estar entre 1 y 100.")
     if args.reprocess and args.source_id is None:
@@ -32,7 +35,8 @@ def main():
             ))
         for source_id in ids:
             with Session(get_engine()) as session:
-                result = process_source(session, source_id, settings, force=args.reprocess, **({"refresh_parts": True} if args.refresh_parts else {}))
+                result = process_source(session, source_id, settings, force=args.reprocess,
+                    **(({"refresh_parts": True} if args.refresh_parts else {}) | ({"action_plan": True} if args.action_plan else {})))
             print(f"Fuente {source_id}: {result['status']}; tareas={result['tasks_count']}, decisiones={result['decisions_count']}")
         print("Procesamiento terminado.")
     except SourceNotProcessable as exc:

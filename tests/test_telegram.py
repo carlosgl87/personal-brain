@@ -177,7 +177,7 @@ class TelegramTests(unittest.TestCase):
         self.assertIn("edited_message", compiled.params["raw_metadata"])
 
     def test_http_route_returns_safe_error_on_database_failure(self):
-        with patch("app.api.routes.telegram.ingest_update", side_effect=SQLAlchemyError("fake-secret")):
+        with patch("app.services.message_handling.ingest_update", side_effect=SQLAlchemyError("fake-secret")):
             response = self.client.post("/telegram/updates", json=update(), headers=self.headers)
         self.assertEqual(response.status_code, 503)
         self.assertNotIn("fake-secret", response.text)
@@ -253,15 +253,19 @@ class TelegramTests(unittest.TestCase):
 
 
     def test_authenticated_route_saves_original_update(self):
-        selected = project("SIMA")
-        source = SimpleNamespace(id=uuid4(), primary_project_id=selected.id)
+        source = SimpleNamespace(id=uuid4(), primary_project_id=None)
         self.session.scalar.side_effect = [None, source]
-        with patch("app.services.telegram_ingestion.resolve_project", return_value=selected):
+        with patch("app.services.message_handling.process_source", return_value={"source_id": str(source.id)}), patch(
+            "app.services.telegram_ingestion.resolve_project") as match:
             response = self.client.post("/telegram/updates", json=update(), headers=self.headers)
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["source_id"], str(source.id))
-        self.assertEqual(response.json()["status"], "saved")
-        self.session.begin.return_value.__exit__.assert_called_once_with(None, None, None)
+        self.assertEqual(response.json()["status"], "answered")
+        match.assert_not_called()
+        compiled = self.session.scalar.call_args_list[1].args[0].compile(dialect=postgresql.dialect())
+        self.assertEqual(compiled.params['raw_content'], update()['message']['text'])
+        self.assertEqual(compiled.params['raw_metadata']['message'], update()['message'])
+        self.assertEqual(compiled.params['raw_metadata']['processing_schema'], 'action-plan-v1')
 
     def test_phase2_migration_only_adds_partial_unique_index(self):
         from alembic import command

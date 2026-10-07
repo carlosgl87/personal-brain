@@ -173,7 +173,7 @@ class EvolutionTests(unittest.TestCase):
     def test_new_migrations_are_additive_local_vector_copy_and_immutable_memory(self):
         output = io.StringIO()
         with patch('app.config.get_settings', return_value=config(DATABASE_URL='postgresql://offline/db')):
-            command.upgrade(Config('alembic.ini', output_buffer=output), '0007_hierarchical_extraction:head', sql=True)
+            command.upgrade(Config('alembic.ini', output_buffer=output), '0007_hierarchical_extraction:0011_task_completion_attempts', sql=True)
         sql = output.getvalue()
         for table in ('chunk_embeddings', 'extraction_generations', 'extraction_generation_parts',
                       'project_memory_versions', 'project_memory_state', 'project_memory_events'):

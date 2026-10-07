@@ -79,7 +79,8 @@ def edit_task(session, command, command_source_id, settings=None):
         receipt = session.scalar(select(Source).where(Source.id == command_source_id).with_for_update())
         if receipt is None or receipt.source_type != "telegram_query":
             return "No se encontró el comando guardado."
-        previous = session.scalar(select(TaskChange).where(TaskChange.command_source_id == command_source_id))
+        previous = session.scalar(select(TaskChange).where(TaskChange.command_source_id == command_source_id,
+                                                          TaskChange.task_id == command.task_id))
         if previous is not None:
             return previous.answer
         source_id = session.scalar(select(Task.source_id).where(Task.id == command.task_id))

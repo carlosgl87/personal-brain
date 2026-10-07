@@ -213,7 +213,7 @@ class MemoryTests(unittest.TestCase):
             self.assertEqual(source.id, source_id)
             self.assertIsNone(source.primary_project_id)
             self.assertEqual(source.raw_content, "original")
-            self.assertEqual(source.raw_metadata, metadata)
+            self.assertEqual(source.raw_metadata, metadata | {"processing_schema": "action-plan-v1"})
             session.reset_mock()
             session.scalar.return_value = SimpleNamespace(id=source_id)
             self.assertEqual(ingest_file(session, "ignored.txt"), source_id)
@@ -243,7 +243,7 @@ class MemoryTests(unittest.TestCase):
         buffer = io.StringIO()
         config = Config("alembic.ini", output_buffer=buffer)
         with patch("app.config.get_settings", return_value=settings(DATABASE_URL="postgresql://offline/db")):
-            command.upgrade(config, "0005_task_changes:head", sql=True)
+            command.upgrade(config, "0005_task_changes:0011_task_completion_attempts", sql=True)
         sql = buffer.getvalue()
         for expected in ("CREATE EXTENSION IF NOT EXISTS vector", "CREATE TABLE source_chunks",
                          "CREATE TABLE reasoning_runs", "UNIQUE (source_id, chunk_version, chunk_index)"):

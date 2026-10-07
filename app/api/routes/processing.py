@@ -15,11 +15,17 @@ router = APIRouter(prefix="/sources", tags=["processing"])
 @router.post("/{source_id}/process", dependencies=[Depends(require_telegram_access)])
 def process(
     source_id: UUID, force: bool = Query(False),
+    action_plan: bool = Query(False),
     settings: Settings = Depends(get_settings), session: Session = Depends(get_session),
 ):
     try:
-        result = process_source(session, source_id, settings, force=force)
-        maybe_index(session, UUID(result.get("transcript_source_id", str(source_id))), settings)
+        result = process_source(session, source_id, settings, force=force,
+                                **({"action_plan": True} if action_plan else {}))
+        if result.get("action_plan"):
+            from app.services.message_handling import respond_to_plan
+            result["answer"] = respond_to_plan(session, result, settings)
+        if not (result.get("action_plan") and result.get("interaction") == "query"):
+            maybe_index(session, UUID(result.get("transcript_source_id", str(source_id))), settings)
         return result
     except SourceNotFound:
         raise HTTPException(status_code=404, detail="Fuente no encontrada.") from None

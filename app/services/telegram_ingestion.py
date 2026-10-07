@@ -41,7 +41,7 @@ def authorized_message(update: dict, user_id: int) -> dict | None:
     return message
 
 
-def ingest_update(session: Session, update: dict, user_id: int, is_query=False) -> dict:
+def ingest_update(session: Session, update: dict, user_id: int, is_query=False, interpret=False) -> dict:
     message = authorized_message(update, user_id)
     if message is None:
         return {"status": "ignored"}
@@ -53,11 +53,15 @@ def ingest_update(session: Session, update: dict, user_id: int, is_query=False) 
         ))
         if existing is not None:
             return source_result(session, existing, "duplicate")
-        project = None if is_query else resolve_project(session, message["text"])
+        project = None if is_query or interpret else resolve_project(session, message["text"])
+        metadata = update | {"processing_schema": "action-plan-v1"} if interpret else update
+        if interpret and message["text"].strip().startswith("/"):
+            name = message["text"].strip().split()[0].casefold().split("@")[0]
+            metadata = metadata | {"command_mode": "nota" if name == "/nota" else "ask"}
         statement = (
             insert(Source).values(
                 source_type="telegram_query" if is_query else "telegram_text", raw_content=message["text"],
-                raw_metadata=update, external_source="telegram", external_id=external_id,
+                raw_metadata=metadata, external_source="telegram", external_id=external_id,
                 primary_project_id=project.id if project else None,
                 processing_status="skipped" if is_query else "pending",
             )

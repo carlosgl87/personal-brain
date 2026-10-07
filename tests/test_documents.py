@@ -106,7 +106,7 @@ class DocumentTests(unittest.TestCase):
             result = ingest_document(self.session, payload, USER_ID, self.cfg)
         params = self.session.scalar.call_args_list[1].args[0].compile(dialect=postgresql.dialect()).params
         self.assertEqual(params['raw_content'], data.decode())
-        self.assertEqual(params['raw_metadata'], original)
+        self.assertEqual(params['raw_metadata'], original | {'processing_schema': 'action-plan-v1'})
         self.assertEqual(params['external_id'], '100')
         rows = [call.args[0] for call in self.session.add.call_args_list]
         asset = next(row for row in rows if isinstance(row, DocumentAsset))
@@ -178,8 +178,8 @@ class DocumentTests(unittest.TestCase):
 
     def test_document_route_and_poller_never_process_or_index_inline(self):
         queued = {'status': 'saved', 'source_id': str(uuid4()), 'media_type': 'document', 'answer': 'Procesamiento: encolado'}
-        with patch('app.api.routes.telegram.ingest_document', return_value=queued), patch('app.api.routes.telegram.maybe_index') as index, patch(
-            'app.api.routes.telegram.route_intent') as classify:
+        with patch('app.api.routes.telegram.ingest_document', return_value=queued), patch('app.services.message_handling.maybe_index') as index, patch(
+            'app.services.intent_router.route_intent') as classify:
             self.assertEqual(self.post(document()).json(), queued)
             index.assert_not_called(); classify.assert_not_called()
         telegram = MagicMock()

@@ -125,7 +125,7 @@ class AudioTests(unittest.TestCase):
         self.assertEqual(audio.processing_status, "pending_transcription")
         statement = session.scalar.call_args_list[1].args[0].compile(dialect=postgresql.dialect())
         self.assertEqual(statement.params["raw_content"], "")
-        self.assertEqual(statement.params["raw_metadata"], update())
+        self.assertEqual(statement.params["raw_metadata"], update() | {"processing_schema": "action-plan-v1"})
         self.assertIn("DO NOTHING", str(statement))
 
     def test_duplicate_capture_reuses_original_asset_without_downloading(self):
@@ -195,6 +195,23 @@ class AudioTests(unittest.TestCase):
         self.assertEqual(result, audio.latest_transcript_source_id)
         model.assert_not_called()
         session.add.assert_not_called()
+
+    def test_new_audio_transcript_carries_action_plan_marker_without_exact_matching(self):
+        audio = source()
+        audio.raw_metadata = audio.raw_metadata | {'processing_schema': 'action-plan-v1'}
+        original_metadata = dict(audio.raw_metadata)
+        asset = SimpleNamespace(content=b'audio', sha256=hashlib.sha256(b'audio').hexdigest(), mime_type='audio/ogg')
+        session = MagicMock()
+        session.scalar.side_effect = [audio, asset]
+        session.scalars.return_value = []
+        with patch('app.services.transcription.transcribe_bytes', return_value='McKinsey FrontRunner: revisar factura.'), patch(
+            'app.services.transcription.resolve_project') as matching:
+            transcribe_audio(session, audio.id, self.settings)
+        child = session.add.call_args.args[0]
+        self.assertEqual(child.raw_metadata['processing_schema'], 'action-plan-v1')
+        self.assertIsNone(child.primary_project_id)
+        self.assertEqual(audio.raw_metadata, original_metadata)
+        matching.assert_not_called()
 
     def test_integrity_failure_does_not_transcribe_or_modify_original(self):
         audio = source()

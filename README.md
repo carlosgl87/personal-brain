@@ -1,6 +1,8 @@
 
 # Personal Brain
 
+La ruta vigente para nuevas entradas naturales es `Source → Message Interpreter → ActionPlan → validación/ejecución transaccional → PostgreSQL → Project Memory`. El refactor `action-plan-v1` incorpora updates persistidos, completions múltiples y consultas mixtas; [arquitectura, compatibilidad y validación local](docs/action-plans.md). Las secciones por fase siguientes conservan la evolución anterior; el intent router y la completion separada son legacy para nuevas notas. El texto natural ahora requiere Claude también al recibirlo sin `--process`; esa opción conserva su papel para procesar audio.
+
 Base de un asistente para organizar información de trabajo. Incluye FASE 1 (catálogo), FASE 2 (texto de Telegram) , FASE 3 (extracción con Claude), FASE 4 (consultas SQL por Telegram) y FASE 5 (audio y transcripción con OpenRouter). FASE 6A agrega memoria por chunks, embeddings y razonamiento; no incluye recordatorios ni frontend.
 
 FastAPI → SQLAlchemy 2 → PostgreSQL. Alembic administra el esquema; el seed administra los datos iniciales por separado. No se crean tablas al iniciar la aplicación.

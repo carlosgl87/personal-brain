@@ -13,7 +13,7 @@ from fastapi.testclient import TestClient
 from app.config import get_settings
 from app.database import get_session
 from app.main import app
-from app.models import (Project, Source, Task, TaskChange, ProjectMemoryState, ProjectMemoryVersion, ProjectMemoryEvent)
+from app.models import (Project, Source, Task, TaskChange, ProjectUpdate, ProjectMemoryState, ProjectMemoryVersion, ProjectMemoryEvent)
 from app.schemas.project_memory import ProjectMemoryContent
 from app.schemas.reasoning import QueryPlan, SynthesizedAnswer
 from app.services.project_memory_events import mark_dirty, schedule_refresh, parse_refresh
@@ -109,7 +109,7 @@ class ProjectMemoryTests(unittest.TestCase):
             return {ProjectMemoryState: item, Project: SimpleNamespace(id=item.project_id, name='SIMA'),
                     ProjectMemoryVersion: previous_version}.get(model)
         session.get.side_effect = get
-        session.scalars.side_effect = [SimpleNamespace(all=lambda: events[:max_sources]), SimpleNamespace(all=lambda: [])]
+        session.scalars.side_effect = [SimpleNamespace(all=lambda: events[:max_sources]), SimpleNamespace(all=lambda: []), SimpleNamespace(all=lambda: [])]
         session.execute.side_effect = [SimpleNamespace(all=lambda: source_rows[:max_sources]), SimpleNamespace(all=lambda: [])]
         return item, session, source_rows, previous_version
 
@@ -124,6 +124,41 @@ class ProjectMemoryTests(unittest.TestCase):
         query = str(session.execute.call_args_list[0].args[0].compile(dialect=postgresql.dialect()))
         self.assertIn('sources.id IN', query)
 
+    def test_updates_are_bounded_inputs_and_old_memory_is_unchanged(self):
+        item, session, rows, previous = self.snapshot_fixture(previous=True)
+        old = copy.deepcopy(previous.memory)
+        updates = [SimpleNamespace(id=uuid4(), source_id=rows[0][0].id,
+            update_text='Nuevo estado ' + str(i), event_at=NOW) for i in range(41)]
+        session.scalars.side_effect = [SimpleNamespace(all=lambda: []), SimpleNamespace(all=lambda: []),
+                                       SimpleNamespace(all=lambda: updates)]
+        session.execute.side_effect = [SimpleNamespace(all=lambda: [])]
+        captured, data = snapshot_data(session, item.project_id, settings())
+        self.assertEqual(len(data['updates']), 40)
+        self.assertTrue(data['warnings'])
+        sql = str(session.scalars.call_args_list[2].args[0].compile(dialect=postgresql.dialect()))
+        self.assertIn('project_updates.processing_run_id = sources.latest_processing_run_id', sql)
+        self.assertIn('LIMIT', sql)
+        cfg = settings(PROJECT_MEMORY_MAX_CHARS=3000)
+        with patch('app.services.project_memory_llm.call_json', return_value=memory(rows[0][0].id, 'Estado actual compacto.')):
+            content = generate_memory(cfg, data)
+        self.assertLess(len(json.dumps(content)), 3000)
+        self.assertEqual(previous.memory, old)
+        self.assertNotIn('Nuevo estado 39', json.dumps(content))
+
+    def test_multiple_natural_changes_from_one_source_are_visible_in_delta(self):
+        item, session, rows, previous = self.snapshot_fixture(previous=True)
+        sid = rows[0][0].id
+        changes = [SimpleNamespace(id=uuid4(), before={'status': 'open'}, after={'status': 'completed'},
+                                   action='natural_completion') for _ in range(2)]
+        events = [SimpleNamespace(revision=i+1, created_at=NOW, source_id=sid, task_id=uuid4(), command_source_id=sid,
+            event_type='task_change', origin_key='task:' + str(c.id)) for i, c in enumerate(changes)]
+        session.scalars.side_effect = [SimpleNamespace(all=lambda: events), SimpleNamespace(all=lambda: []),
+                                       SimpleNamespace(all=lambda: [])]
+        original_get = session.get.side_effect
+        session.get.side_effect = lambda model, identifier: next(c for c in changes if c.id == identifier) if model is TaskChange else original_get(model, identifier)
+        _, data = snapshot_data(session, item.project_id, settings())
+        self.assertEqual(len(data['changes']), 2)
+        self.assertTrue(all(c['after']['status'] == 'completed' for c in data['changes']))
     def test_incremental_reads_previous_memory_and_only_unconsumed_events(self):
         item, session, rows, previous = self.snapshot_fixture(previous=True)
         captured, data = snapshot_data(session, item.project_id, settings())
@@ -265,7 +300,7 @@ class ProjectMemoryTests(unittest.TestCase):
         task = SimpleNamespace(id=uuid4(), source_id=uuid4(), processing_run_id=None,
             title='Current SQL task', description=None, owner_text='Ana', status='open', due_at=None, completed_at=None)
         session.execute.side_effect = [SimpleNamespace(all=lambda: []), SimpleNamespace(all=lambda: [(task, 'SIMA')]),
-            SimpleNamespace(all=lambda: []), SimpleNamespace(all=lambda: [])]
+            SimpleNamespace(all=lambda: []), SimpleNamespace(all=lambda: []), SimpleNamespace(all=lambda: [])]
         result = retrieve(session, QueryPlan(), settings())
         self.assertEqual(result['project_memories'], [])
         self.assertEqual(result['tasks'][0]['title'], 'Current SQL task')
@@ -476,7 +511,7 @@ class ProjectMemoryTests(unittest.TestCase):
         task = SimpleNamespace(id=uuid4(), source_id=sid, title='Dashboard', status='completed', owner_text='Ana', due_at=None, completed_at=NOW)
         events = [SimpleNamespace(revision=2, created_at=NOW, source_id=sid, task_id=task.id,
             command_source_id=uuid4(), event_type='task_change', origin_key='task:' + str(uuid4()))]
-        session.scalars.side_effect = [SimpleNamespace(all=lambda: events), SimpleNamespace(all=lambda: [task])]
+        session.scalars.side_effect = [SimpleNamespace(all=lambda: events), SimpleNamespace(all=lambda: [task]), SimpleNamespace(all=lambda: [])]
         original_get = session.get.side_effect
         session.get.side_effect = lambda model, identifier: SimpleNamespace(before={'status': 'open'}, after={'status': 'completed'}, action='completar') if model is TaskChange else original_get(model, identifier)
         _, data = snapshot_data(session, item.project_id, settings())

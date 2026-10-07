@@ -343,7 +343,7 @@ class TaskCompletionTests(unittest.TestCase):
             return {ProjectMemoryState: repo.state, Project: repo.project,
                     TaskChange: repo.changes[0]}.get(model)
         session.get.side_effect = get
-        session.scalars.side_effect = [Row(all=lambda: repo.events), Row(all=lambda: [repo.task])]
+        session.scalars.side_effect = [Row(all=lambda: repo.events), Row(all=lambda: [repo.task]), Row(all=lambda: [])]
         session.execute.side_effect = [Row(all=lambda: []), Row(all=lambda: [])]
         cfg = settings(PROJECT_MEMORY_ENABLED=True)
         captured, data = snapshot_data(session, repo.project.id, cfg)
@@ -392,31 +392,29 @@ class TaskCompletionTests(unittest.TestCase):
         payload = {'update_id': 1, 'message': {'message_id': 1, 'date': 1700000000,
             'from': {'id': 123, 'is_bot': False}, 'chat': {'id': 123, 'type': 'private'}, 'text': TEXT}}
         order = []
-        def ingest(*args):
+        def ingest(*args, **kwargs):
             order.append('saved')
             return {'status': 'saved', 'source_id': source_id}
-        def complete(*args):
-            order.append('completed')
-            return '✅ Tarea completada: ' + TITLE
-        with patch('app.api.routes.telegram.ingest_update', side_effect=ingest) as saved, patch(
-            'app.api.routes.telegram.complete_from_note', side_effect=complete), patch(
-            'app.api.routes.telegram.maybe_index') as index:
-            response = TestClient(app).post('/telegram/updates', json=payload,
-                                           headers={'Authorization': 'Bearer fake'})
-        self.assertEqual(order, ['saved', 'completed'])
-        self.assertFalse(saved.call_args.kwargs.get('is_query', False))
-        self.assertEqual(response.json()['status'], 'saved')
-        self.assertIn(TITLE, response.json()['task_completion_answer'])
+        def process(*args, **kwargs):
+            order.append('interpreted')
+            return {'source_id': source_id, 'action_plan': True, 'completed_titles': [TITLE],
+                'new_task_titles': ['Agregar filtro'], 'tasks_count': 1, 'updates_count': 1}
+        with patch('app.services.message_handling.ingest_update', side_effect=ingest) as saved, patch(
+            'app.services.message_handling.process_source', side_effect=process), patch(
+            'app.services.message_handling.maybe_index') as index, patch(
+            'app.services.task_completion.complete_from_note') as old_completion:
+            response = TestClient(app).post('/telegram/updates', json=payload, headers={'Authorization': 'Bearer fake'})
+        self.assertEqual(order, ['saved', 'interpreted'])
+        self.assertTrue(saved.call_args.kwargs['interpret'])
+        self.assertEqual(response.json()['status'], 'answered')
+        self.assertIn(TITLE, response.json()['answer'])
         index.assert_called_once()
+        old_completion.assert_not_called()
         telegram = MagicMock()
-        with patch('app.telegram.forward_update', return_value=response.json()), patch(
-            'app.telegram.process_saved_source', return_value={'summary': 'Agregar filtro', 'tasks_count': 1,
-                                                             'decisions_count': 0}) as process:
+        with patch('app.telegram.forward_update', return_value=response.json()), patch('app.telegram.process_saved_source') as process:
             process_update(MagicMock(), telegram, 'http://localhost', 'fake', 123, payload, processing=True)
-        process.assert_called_once()
-        receipt = telegram.call.call_args.args[1]['text']
-        self.assertIn('✅ Tarea completada: ' + TITLE, receipt)
-        self.assertIn('Tareas: 1', receipt)
+        process.assert_not_called()
+        self.assertIn(TITLE, telegram.call.call_args.args[1]['text'])
 
     def test_migration_is_additive_and_attempts_are_unique_and_immutable(self):
         buffer = io.StringIO()

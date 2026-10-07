@@ -27,22 +27,33 @@ class SourceNotProcessable(ValueError):
 
 def run_result(run, status="processed"):
     result = run.result
-    return {
+    response = {
         "status": status, "source_id": str(run.source_id), "run_id": str(run.id),
         "summary": result["summary"], "tasks_count": len(result["tasks"]),
         "decisions_count": len(result["decisions"]),
     }
+    if result.get("schema_version") == "action-plan-v1":
+        response.update(updates_count=len(result.get("updates", [])),
+                        action_plan=True, query=result.get("query"), interaction=result["interaction"],
+                        project_id=result.get("execution", {}).get("project_id"),
+                        completed_titles=result.get("execution", {}).get("completed_titles", []),
+                        new_task_titles=[t["title"] for t in result["tasks"]],
+                        ambiguities=result.get("execution", {}).get("ambiguities", []))
+    return response
 
 
-def process_source(session: Session, source_id: UUID, settings, force=False, refresh_parts=False):
+def process_source(session: Session, source_id: UUID, settings, force=False, refresh_parts=False, action_plan=False):
     settings.llm_credentials()
+    if action_plan and not force:
+        raise SourceNotProcessable("--action-plan requiere un reprocesamiento explícito de una fuente.")
     if refresh_parts and not force:
         raise SourceNotProcessable("--refresh-parts requiere --reprocess.")
     with session.begin():
         kind = session.scalar(select(Source.source_type).where(Source.id == source_id))
     if kind == "telegram_audio":
         transcript_id = transcribe_audio(session, source_id, settings)
-        result = process_text_source(session, transcript_id, settings, force=force, **({"refresh_parts": True} if refresh_parts else {}))
+        result = process_text_source(session, transcript_id, settings, force=force,
+            **(({"refresh_parts": True} if refresh_parts else {}) | ({"action_plan": True} if action_plan else {})))
         result["audio_source_id"] = str(source_id)
         result["transcript_source_id"] = str(transcript_id)
         with session.begin():
@@ -51,10 +62,13 @@ def process_source(session: Session, source_id: UUID, settings, force=False, ref
                 .where(Source.id == transcript_id)
             )
         return result
-    return process_text_source(session, source_id, settings, force=force, **({"refresh_parts": True} if refresh_parts else {}))
+    return process_text_source(session, source_id, settings, force=force,
+        **(({"refresh_parts": True} if refresh_parts else {}) | ({"action_plan": True} if action_plan else {})))
 
 
-def process_text_source(session: Session, source_id: UUID, settings, force=False, refresh_parts=False):
+def process_text_source(session: Session, source_id: UUID, settings, force=False, refresh_parts=False, action_plan=False):
+    if action_plan and not force:
+        raise SourceNotProcessable("--action-plan requiere un reprocesamiento explícito de una fuente.")
     if refresh_parts and not force:
         raise SourceNotProcessable("--refresh-parts requiere --reprocess.")
     # Configuración inválida no modifica fuentes ni abre llamadas externas.
@@ -82,6 +96,20 @@ def process_text_source(session: Session, source_id: UUID, settings, force=False
                 Project.status == "active", Project.archived_at.is_(None),
             ).options(selectinload(Project.aliases), selectinload(Project.area),
                       selectinload(Project.company))).all()
+            if action_plan or source.raw_metadata.get("processing_schema") == "action-plan-v1":
+                from app.services.action_context import assemble_context
+                from app.services.message_interpreter import interpret, PROMPT_VERSION as ACTION_PROMPT
+                from app.services.action_execution import execute_plan
+                try:
+                    context = assemble_context(session, source, projects, settings)
+                    plan = interpret(settings, context)
+                except ValueError:
+                    raise ExtractionError("Contexto demasiado grande; fuente conservada.") from None
+                run = execute_plan(session, source, plan, context, settings, ACTION_PROMPT)
+                for previous_project in sorted(affected - {source.primary_project_id}, key=str):
+                    mark_dirty(session, previous_project, settings, origin_key="run:" + str(run.id),
+                               source_id=source.id, event_type="source_revision")
+                return run_result(run)
             result = extract(settings, source, projects)
             # Una propuesta del LLM necesita también una coincidencia inequívoca del catálogo.
             matched = match_source_project(source, projects)
@@ -119,7 +147,8 @@ def process_text_source(session: Session, source_id: UUID, settings, force=False
         return response
     except HierarchicalRequired:
         from app.services.hierarchical import process_hierarchical
-        return process_hierarchical(session, source_id, settings, force=force, **({"refresh_parts": True} if refresh_parts else {}))
+        return process_hierarchical(session, source_id, settings, force=force,
+            **(({"refresh_parts": True} if refresh_parts else {}) | ({"action_plan": True} if action_plan else {})))
     except ExtractionError:
         # Mantiene el resultado previo si falla un reprocesamiento.
         with session.begin():

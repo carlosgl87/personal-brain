@@ -100,7 +100,7 @@ def ingest_audio(session, update, user_id, settings):
         if created:
             source = session.scalar(insert(Source).values(
                 id=uuid4(), source_type="telegram_audio",
-                raw_content=message.get("caption") or "", raw_metadata=update,
+                raw_content=message.get("caption") or "", raw_metadata=update | {"processing_schema": "action-plan-v1"},
                 external_source="telegram", external_id=external_id,
                 processing_status="awaiting_download",
             ).on_conflict_do_nothing(

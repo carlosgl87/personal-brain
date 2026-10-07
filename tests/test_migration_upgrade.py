@@ -1,5 +1,6 @@
 """Upgrade a disposable EMPTY database through old data to the current release."""
 import os
+import json
 import unittest
 from types import SimpleNamespace
 from uuid import uuid4
@@ -49,7 +50,37 @@ class MigrationUpgradeTests(unittest.TestCase):
                     {'id':chunk_id,'source':source_id,'content':original,'length':len(original)})
                 session.add(ProcessingRunPart(id=part_id,source_id=source_id,source_chunk_id=chunk_id,chunk_version='legacy-version',part_index=0,
                     provider='anthropic',model='legacy-test',prompt_version='legacy-prompt',result={'summary':'Saved partial'}))
+            command.upgrade(cfg,'0011_task_completion_attempts')
+            run_id, task_id, decision_id, change_id, attempt_id, version_id = [uuid4() for _ in range(6)]
+            with engine.begin() as conn:
+                conn.execute(text('''INSERT INTO processing_runs (id,source_id,provider,model,prompt_version,result)
+                    VALUES (:id,:source,'anthropic','legacy-test','legacy-prompt',CAST(:result AS jsonb))'''),
+                    {'id': run_id, 'source': source_id, 'result': json.dumps({'summary': 'Old result', 'tasks': [], 'decisions': []})})
+                conn.execute(text("INSERT INTO tasks (id,source_id,project_id,processing_run_id,title,status) VALUES (:id,:source,:project,:run,'Old task','open')"),
+                    {'id': task_id, 'source': source_id, 'project': project_id, 'run': run_id})
+                conn.execute(text("INSERT INTO decisions (id,source_id,project_id,processing_run_id,decision_text) VALUES (:id,:source,:project,:run,'Old decision')"),
+                    {'id': decision_id, 'source': source_id, 'project': project_id, 'run': run_id})
+                conn.execute(text('''INSERT INTO task_changes (id,task_id,command_source_id,action,before,after,answer)
+                    VALUES (:id,:task,:source,'completar','{}','{}','Old audit')'''),
+                    {'id': change_id, 'task': task_id, 'source': source_id})
+                conn.execute(text("INSERT INTO task_completion_attempts (id,source_id,result,answer) VALUES (:id,:source,'{}','Old attempt')"),
+                    {'id': attempt_id, 'source': source_id})
+                conn.execute(text('''INSERT INTO project_memory_versions
+                    (id,project_id,version_number,memory,update_type,trigger_source_ids,retrieved_context,through_revision,
+                     consolidated_through_at,provider,model,prompt_version)
+                    VALUES (:id,:project,1,'{}','incremental','[]','{}',0,now(),'anthropic','legacy-test','old-memory')'''),
+                    {'id': version_id, 'project': project_id})
+            preserved_tables = ('sources', 'tasks', 'decisions', 'processing_runs', 'processing_run_parts',
+                                'task_changes', 'task_completion_attempts', 'project_memory_versions',
+                                'project_memory_state', 'project_memory_events')
+            def snapshot():
+                with engine.connect() as conn:
+                    return {table: conn.execute(text('SELECT to_jsonb(t) FROM ' + table + ' t ORDER BY id')).scalars().all()
+                            for table in preserved_tables if table != 'project_memory_state'} | {
+                        'project_memory_state': conn.execute(text('SELECT to_jsonb(t) FROM project_memory_state t ORDER BY project_id')).scalars().all()}
+            old_rows = snapshot()
             command.upgrade(cfg,'head')
+            self.assertEqual(snapshot(), old_rows, 'Action Plan migration must preserve every historical row exactly.')
             # Idempotent repeat: the copied vector must not duplicate or modify text.
             command.upgrade(cfg,'head')
         with Session(engine) as session:
@@ -65,5 +96,7 @@ class MigrationUpgradeTests(unittest.TestCase):
             self.assertEqual(vector.dimensions,3)
             self.assertEqual(list(vector.embedding),[1,0,0])
             self.assertEqual(session.scalar(select(func.count(ProjectMemoryState.project_id))),0)
-            self.assertEqual(session.scalar(select(func.count(Project.id))),32)
+            self.assertEqual(session.scalar(select(func.count(Project.id))), len(json.loads((ROOT/'app/seed_data.json').read_text(encoding='utf-8'))['projects']))
+            self.assertEqual(session.scalar(text('SELECT count(*) FROM project_updates')), 0)
+            self.assertEqual(session.scalar(text('SELECT count(*) FROM update_evidence')), 0)
         engine.dispose()

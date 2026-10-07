@@ -29,6 +29,10 @@ def notify_completed(engine, source_id, result, settings):
             project = session.get(Project, source.primary_project_id) if source.primary_project_id else None
             message = (f"Procesamiento completado: {asset.filename}\nProyecto: {project.name if project else 'sin proyecto identificado'}"
                 f"\nTareas: {result['tasks_count']}\nDecisiones: {result['decisions_count']}\nFuente: {source_id}")
+        if result.get('action_plan'):
+            from app.services.message_handling import respond_to_plan
+            with Session(engine) as session:
+                message += '\n' + respond_to_plan(session, result, settings)
         for name in ('httpx', 'httpcore'):
             logging.getLogger(name).setLevel(logging.CRITICAL)
             logging.getLogger(name).propagate = False

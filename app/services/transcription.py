@@ -110,7 +110,7 @@ def transcribe_audio(session, source_id, settings):
                 raise TranscriptionError("No se pudo verificar el archivo original.")
             usage = {}
             transcript = transcribe_bytes(asset.content, settings, mime_type=asset.mime_type, usage=usage)
-            project = resolve_project(session, audio.raw_content + "\n" + transcript)
+            project = None if audio.raw_metadata.get("processing_schema") == "action-plan-v1" else resolve_project(session, audio.raw_content + "\n" + transcript)
             transcript_id = uuid4()
             metadata = dict(audio.raw_metadata)
             metadata["transcription"] = {
@@ -118,6 +118,8 @@ def transcribe_audio(session, source_id, settings):
                 "language": settings.stt_language, "audio_source_id": str(audio.id),
                 "audio_sha256": asset.sha256, "usage": usage,
             }
+            if audio.raw_metadata.get("processing_schema") == "action-plan-v1":
+                metadata["processing_schema"] = "action-plan-v1"
             child = Source(
                 id=transcript_id, parent_source_id=audio.id, source_type="audio_transcript",
                 raw_content=transcript, raw_metadata=metadata, received_at=audio.received_at,

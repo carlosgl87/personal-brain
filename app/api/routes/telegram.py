@@ -1,24 +1,17 @@
 import hmac
-from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from sqlalchemy import select
 from sqlalchemy.orm import Session
-from app.models import Source
 
 from app.config import Settings, get_settings
 from app.database import get_session
 from app.services.telegram_ingestion import authorized_message, ingest_update
 from app.services.queries import answer_query, parse_query
 from app.services.task_management import edit_task, parse_task_command
-from app.services.task_completion import complete_from_note, has_completion_signal
 from app.services.audio import AudioError, authorized_audio, ingest_audio
 from app.services.reasoning import answer_reasoning, reasoning_question
-from app.services.memory import maybe_index
 from app.services.documents import DocumentError, authorized_document, ingest_document
-from app.services.intent_router import AMBIGUOUS_REPLY, ERROR_REPLY, deterministic_intent, route_intent
 from app.services.source_processing_jobs import answer_processing, processing_argument
-from app.services.queries import catalog_query
 from app.services.project_memory_events import parse_refresh, schedule_refresh
 
 router = APIRouter(prefix="/telegram", tags=["telegram"])
@@ -81,31 +74,9 @@ def receive_update(
     if raw.strip().startswith("/") and name not in {"/ask", "/pregunta", "/nota"}:
         saved = ingest_update(session, update, user_id, is_query=True)
         return {"status": "answered", "source_id": saved["source_id"], "answer": answer_query(session, parse_query(raw))}
-    if deterministic_intent(raw) is None:
-        # Avoid paying classification again when replaying a previously saved update.
-        with session.begin():
-            existing = session.scalar(select(Source.source_type).where(Source.external_source == "telegram",
-                Source.external_id == str(update["update_id"])))
-        intent = {"telegram_query": "query", "telegram_text": "new_information"}.get(existing) if isinstance(existing, str) else None
-    else:
-        intent = None
-    try:
-        intent = intent or route_intent(raw, settings)
-    except Exception:
-        return {"status": "answered", "answer": ERROR_REPLY}
-    if intent == "ambiguous":
-        return {"status": "answered", "answer": AMBIGUOUS_REPLY}
-    if intent == "new_information":
-        saved = ingest_update(session, update, user_id)
-        if saved["status"] in {"saved", "duplicate"}:
-            if has_completion_signal(raw):
-                completion_answer = complete_from_note(session, UUID(saved["source_id"]), settings)
-                if completion_answer:
-                    saved["task_completion_answer"] = completion_answer
-            maybe_index(session, UUID(saved["source_id"]), settings)
-        return saved
-    saved = ingest_update(session, update, user_id, is_query=True)
-    question = explicit_question if explicit_question is not None else raw.strip()
-    simple = catalog_query(question)
-    answer = answer_query(session, simple) if simple else answer_reasoning(session, question, saved["source_id"], settings)
-    return {"status": "answered", "source_id": saved["source_id"], "answer": answer}
+    if name in {"/ask", "/pregunta"}:
+        saved = ingest_update(session, update, user_id, is_query=True)
+        return {"status": "answered", "source_id": saved["source_id"],
+                "answer": answer_reasoning(session, explicit_question or "", saved["source_id"], settings)}
+    from app.services.message_handling import handle_message
+    return handle_message(session, update, user_id, settings)

@@ -7,7 +7,7 @@ from uuid import UUID, uuid4
 from sqlalchemy import func, select
 from sqlalchemy.orm import selectinload
 
-from app.models import Area, Company, Decision, Project, ReasoningRun, Source, Task
+from app.models import Area, Company, Decision, Project, ReasoningRun, Source, Task, ProjectUpdate
 from app.services.embeddings import EmbeddingError, embedding_ready
 from app.services.memory import MemoryError, semantic_search
 from app.services.normalization import normalize
@@ -58,6 +58,12 @@ def date_filter(statement, column, plan):
 
 
 def temporal_column(kind, basis):
+    if kind == "updates":
+        if basis == "created_date":
+            return ProjectUpdate.created_at
+        if basis == "source_date":
+            return Source.received_at
+        return func.coalesce(ProjectUpdate.event_at, Source.received_at) if basis == "mixed" else None
     if basis == "none":
         return None
     if basis == "source_date":
@@ -84,7 +90,7 @@ def retrieve(session, plan, settings):
         raise MemoryError(scope.error)
     limits = effective_limits(plan)
     global_broad = scope.project_ids is None and plan.retrieval_depth == "broad"
-    context = {"scope": scope.label, "tasks": [], "decisions": [], "recent_sources": [],
+    context = {"scope": scope.label, "tasks": [], "decisions": [], "updates": [], "recent_sources": [],
                "chunks": [], "warnings": [], "projects": [], "project_memories": [], "new_sources": []}
     context["temporal_window"] = {"time_basis": plan.time_basis,
         "date_from": plan.date_from.isoformat() if plan.date_from else None,
@@ -125,6 +131,18 @@ def retrieve(session, plan, settings):
                 "decided_at": decision.decided_at.isoformat() if decision.decided_at else None})
         if len(rows) > limits["decisions"]:
             context["warnings"].append("El limite de decisiones dejo cobertura parcial; hay más.")
+    if plan.include_updates:
+        statement = select(ProjectUpdate, Source).join(Source, Source.id == ProjectUpdate.source_id).where(current_derived(ProjectUpdate))
+        statement = scoped(statement, ProjectUpdate.project_id, scope)
+        rows = session.execute(date_filter(statement, temporal_column("updates", plan.time_basis), plan)
+            .order_by(ProjectUpdate.created_at.desc(), ProjectUpdate.id).limit(limits["decisions"] + 1)).all()
+        for update, source in rows[:limits["decisions"]]:
+            context["updates"].append({"update_id": str(update.id), "source_id": str(source.id),
+                "run_id": str(update.processing_run_id), "project_id": str(update.project_id) if update.project_id else None,
+                "text": clipped(update.update_text, 1500), "event_at": update.event_at.isoformat() if update.event_at else None,
+                "derived": True, "original_excerpt": clipped(source.raw_content, 2000)})
+        if len(rows) > limits["decisions"]:
+            context["warnings"].append("Updates limitados; cobertura parcial.")
     if plan.include_recent_sources:
         statement = date_filter(source_statement(scope), temporal_column("sources", plan.time_basis), plan)
         rows = session.execute(statement.order_by(Source.received_at.desc(), Source.id).limit(limits["recent_sources"] + 1)).all()
@@ -167,12 +185,12 @@ def retrieve(session, plan, settings):
 
 
 def trace_context(context):
-    result = {key: value for key, value in context.items() if key not in {"chunks", "recent_sources", "tasks", "decisions", "project_memories", "new_sources"}}
-    for kind in ("tasks", "decisions"):
+    result = {key: value for key, value in context.items() if key not in {"chunks", "recent_sources", "tasks", "decisions", "updates", "project_memories", "new_sources"}}
+    for kind in ("tasks", "decisions", "updates"):
         result[kind] = []
-        for item in context[kind]:
-            trace = {key: value for key, value in item.items() if key not in {"title", "description", "text"}}
-            for key in ("title", "description", "text"):
+        for item in context.get(kind, []):
+            trace = {key: value for key, value in item.items() if key not in {"title", "description", "text", "original_excerpt"}}
+            for key in ("title", "description", "text", "original_excerpt"):
                 if key in item:
                     value = item[key]
                     text = value.get("text", "") if isinstance(value, dict) else (value or "")
@@ -202,7 +220,7 @@ def trace_context(context):
     return result
 
 
-def answer_reasoning(session, question, question_source_id, settings):
+def answer_reasoning(session, question, question_source_id, settings, interpreted_plan=None):
     if not question.strip():
         return "Usa /ask seguido de una pregunta."
     if len(question) > 3000:
@@ -210,7 +228,7 @@ def answer_reasoning(session, question, question_source_id, settings):
     try:
         with session.begin():
             source = session.scalar(select(Source).where(Source.id == UUID(str(question_source_id))).with_for_update())
-            if source is None or source.source_type != "telegram_query":
+            if source is None or (source.source_type != "telegram_query" and interpreted_plan is None):
                 raise ReasoningError("La pregunta no está guardada como consulta.")
             cached = session.scalar(select(ReasoningRun).where(ReasoningRun.question_source_id == source.id).order_by(
                 ReasoningRun.created_at.desc(), ReasoningRun.id).limit(1))
@@ -218,9 +236,9 @@ def answer_reasoning(session, question, question_source_id, settings):
                 return cached.answer
             key, model = settings.llm_credentials()
             now = datetime.now(timezone.utc)
-            plan = plan_question(question, catalog_context(session), now, settings)
+            plan = interpreted_plan or plan_question(question, catalog_context(session), now, settings)
             context = retrieve(session, plan, settings)
-            if not any(context.get(k) for k in ("tasks", "decisions", "recent_sources", "chunks", "project_memories", "new_sources")):
+            if not any(context.get(k) for k in ("tasks", "decisions", "updates", "recent_sources", "chunks", "project_memories", "new_sources")):
                 answer = "No encontré evidencia suficiente en el alcance consultado. Puede haber fuentes todavía sin indexar."
             else:
                 answer = synthesize(question, context, settings)
@@ -229,7 +247,7 @@ def answer_reasoning(session, question, question_source_id, settings):
                 if context.get("retrieval", {}).get("budget_reduced"):
                     answer += "\n\nCobertura parcial: la evidencia se redujo por el presupuesto de contexto."
             session.add(ReasoningRun(id=uuid4(), question_source_id=source.id, provider="anthropic",
-                model=model, planner_version=PLANNER_VERSION, plan=plan.model_dump(mode="json"),
+                model=model, planner_version="message-interpreter-v1" if interpreted_plan is not None else PLANNER_VERSION, plan=plan.model_dump(mode="json"),
                 retrieved_context=trace_context(context), answer=answer))
             return answer
     except MemoryError as exc:

@@ -41,6 +41,12 @@ class ExtractedDecision(StrictModel):
         return value
 
 
+class ExtractedUpdate(StrictModel):
+    update_text: str = Field(min_length=1, max_length=3000)
+    event_at: AwareDatetime | None = None
+    evidence: str = Field(min_length=1)
+
+
 class Extraction(StrictModel):
     project_id: UUID | None
     summary: str
@@ -50,3 +56,4 @@ class Extraction(StrictModel):
     dates: list[str]
     follow_ups: list[str]
     tags: list[str]
+    updates: list[ExtractedUpdate] = Field(default_factory=list, max_length=100)
