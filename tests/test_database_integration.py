@@ -412,9 +412,14 @@ class DatabaseIntegrationTests(unittest.TestCase):
     def test_document_worker_reuses_extraction_and_notification_failure_keeps_completed(self):
         from app.source_processing_worker import run_once
         from app.models import SourceProcessingJob,DocumentAsset
-        result,_,cfg=self.save_document(); sid=UUID(result['source_id'])
+        result,_,cfg=self.save_document(content=QUOTE); sid=UUID(result['source_id'])
+        with Session(self.engine) as session:
+            pid = session.get(Source, sid).primary_project_id
+        from app.schemas.action_plan import ActionPlanV2
+        item = output(task=True)['tasks'][0] | {'project_id': pid, 'scope_confidence': .99}
+        v2 = ActionPlanV2(schema_version='action-plan-v2', interaction='update', summary='Informe', tasks=[item])
         with patch('app.source_processing_worker.candidate_ids',return_value=[sid]), patch(
-            'app.services.processing.extract',return_value=Extraction.model_validate(output(task=True))) as extract, patch(
+            'app.services.message_interpreter.interpret',return_value=v2) as extract, patch(
             'app.source_processing_worker.TelegramAPI') as api:
             api.return_value.call.side_effect=RuntimeError('fake secret')
             self.assertEqual(run_once(self.engine,cfg),1)
@@ -432,7 +437,10 @@ class DatabaseIntegrationTests(unittest.TestCase):
         sid=UUID(result['source_id'])
         with Session(self.engine) as session:
             sima=session.scalar(select(Project.id).where(Project.slug=='sima'))
-        with Session(self.engine) as session,patch('app.services.processing.extract',return_value=Extraction.model_validate(output(project_id=sima,task=True))):
+        from app.schemas.action_plan import ActionPlanV2
+        quote = 'Ana debe enviar el informe mañana.'
+        proposal = ActionPlanV2(schema_version='action-plan-v2', interaction='update', summary='Informe', tasks=[{'project_id': sima, 'scope_confidence': .99, 'title': 'Enviar informe', 'description': None, 'owner_text': 'Ana', 'due_at': None, 'evidence': quote}])
+        with Session(self.engine) as session,patch('app.services.message_interpreter.interpret',return_value=proposal):
             process_text_source(session,sid,cfg)
         with Session(self.engine) as session:
             self.assertIsNone(session.get(Source,sid).primary_project_id)
@@ -473,8 +481,20 @@ class DatabaseIntegrationTests(unittest.TestCase):
         content='SIMA. '+ 'x'*5880 + ' '+ QUOTE + ' '+ 'y'*31000
         result,_,cfg=self.save_document(caption='/reunion SIMA',content=content)
         sid=UUID(result['source_id']); provider=FakeClaude(fail_part=3)
+        from app.schemas.hierarchical import ConsolidatedActionPlanV2
+        base_provider = provider
+        def v2_provider(settings, system, data, schema, client=None, **kwargs):
+            result = base_provider(settings, system, data, schema, client, **kwargs)
+            if schema is ConsolidatedActionPlanV2:
+                payload = result.model_dump(mode='json')
+                pid = payload.pop('project_id')
+                for kind in ('tasks', 'decisions', 'updates'):
+                    for item in payload[kind]: item.update(project_id=pid, scope_confidence=.99, ambiguities=[])
+                payload.update(schema_version='action-plan-v2', interaction='update')
+                return ConsolidatedActionPlanV2.model_validate(payload)
+            return result
         with patch('app.source_processing_worker.candidate_ids',return_value=[sid]), patch(
-            'app.services.hierarchical_llm.call_json',side_effect=provider), patch('app.source_processing_worker.notify_completed') as notify:
+            'app.services.hierarchical_llm.call_json',side_effect=v2_provider), patch('app.source_processing_worker.notify_completed') as notify:
             self.assertEqual(run_once(self.engine,cfg),1)
             notify.assert_not_called()
             with Session(self.engine) as session:
@@ -519,3 +539,54 @@ class DatabaseIntegrationTests(unittest.TestCase):
                 release.set()
             self.assertEqual(first.result(timeout=10),1)
             indexed.assert_called_once(); process.assert_called_once()
+
+
+    def test_v2_multi_project_membership_memory_and_idempotency(self):
+        from app.schemas.action_plan import ActionPlanV2
+        from app.services.action_context import assemble_v2_context
+        quote = 'Ya envié accesos y terminé la presentación.'
+        note = self.save_source(content=quote, source_type='telegram_text', metadata={'processing_schema': 'action-plan-v2'})
+        first, second = uuid4(), uuid4()
+        with Session(self.engine) as session, session.begin():
+            session.add_all([Task(id=first, project_id=self.a, title='Enviar accesos', status='open'),
+                             Task(id=second, project_id=self.b, title='Presentación', status='open')])
+        # Fixture names are explicit in source text so local retrieval finds both.
+        with Session(self.engine) as session:
+            names = [session.get(Project, pid).name for pid in (self.a, self.b)]
+        # Sources are immutable; create the actual note with names rather than updating it.
+        note = self.save_source(content=' / '.join(names) + ': ' + quote, source_type='telegram_text', metadata={'processing_schema': 'action-plan-v2'})
+        proposal = ActionPlanV2(schema_version='action-plan-v2', interaction='update', summary='Accesos y presentación',
+            completed_tasks=[{'project_id': pid, 'scope_confidence': .99, 'task_id': tid, 'confidence': .99,
+                'state': 'performed', 'evidence': quote, 'alternatives': []} for pid, tid in ((self.a, first), (self.b, second))],
+            updates=[{'project_id': pid, 'scope_confidence': .99, 'update_text': 'Trabajo terminado', 'evidence': quote} for pid in (self.a, self.b)])
+        with patch('app.services.message_interpreter.interpret', return_value=proposal) as llm:
+            with Session(self.engine) as session: process_text_source(session, note, self.cfg)
+            with Session(self.engine) as session: process_text_source(session, note, self.cfg)
+        llm.assert_called_once()
+        with Session(self.engine) as session:
+            self.assertIsNone(session.get(Source, note).primary_project_id)
+            self.assertEqual(session.scalar(select(func.count(TaskChange.id)).where(TaskChange.command_source_id == note)), 2)
+            for pid in (self.a, self.b):
+                self.assertTrue(session.get(ProjectMemoryState, pid).is_dirty)
+                rows = session.execute(source_statement(Scope([pid], 'fixture')).where(Source.id == note)).all()
+                self.assertEqual(len(rows), 1)
+                _, data = snapshot_data(session, pid, self.cfg)
+                self.assertTrue(any(u['source_id'] == str(note) for u in data['updates']))
+                self.assertTrue(any(s['source_id'] == str(note) for s in data['sources']))
+            self.assertFalse(session.execute(source_statement(Scope([], 'empty')).where(Source.id == note)).all())
+
+    def test_v2_late_persistence_failure_rolls_back_all_projects(self):
+        from app.schemas.action_plan import ActionPlanV2
+        quote = 'SIMA: validamos los accesos.'
+        note = self.save_source(content=quote, source_type='telegram_text', metadata={'processing_schema': 'action-plan-v2'})
+        with Session(self.engine) as session:
+            pid = session.scalar(select(Project.id).where(Project.slug == 'sima'))
+        proposal = ActionPlanV2(schema_version='action-plan-v2', interaction='update', summary='Accesos', updates=[
+            {'project_id': pid, 'scope_confidence': .99, 'update_text': 'Accesos validados', 'evidence': quote}])
+        with Session(self.engine) as session, patch('app.services.message_interpreter.interpret', return_value=proposal), patch(
+                'app.services.action_execution_v2.mark_dirty', side_effect=RuntimeError('rollback fixture')):
+            with self.assertRaises(RuntimeError): process_text_source(session, note, self.cfg)
+        with Session(self.engine) as session:
+            self.assertEqual(session.scalar(select(func.count(ProjectUpdate.id)).where(ProjectUpdate.source_id == note)), 0)
+            self.assertEqual(session.scalar(select(func.count(ProcessingRun.id)).where(ProcessingRun.source_id == note)), 0)
+            self.assertIsNone(session.get(Source, note).latest_processing_run_id)

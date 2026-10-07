@@ -10,6 +10,8 @@ from app.models import Project, Source
 
 
 def respond_to_plan(session, result, settings):
+    if result.get("schema_version") == "action-plan-v2":
+        return respond_v2(session, result, settings)
     with session.begin():
         project = session.get(Project, UUID(result["project_id"])) if result.get("project_id") else None
         label = project.name if project else "sin proyecto identificado"
@@ -31,7 +33,7 @@ def handle_message(session, update, user_id, settings):
     if saved["status"] == "duplicate":
         with session.begin():
             original = session.get(Source, UUID(saved["source_id"]))
-            legacy = original.raw_metadata.get("processing_schema") != "action-plan-v1"
+            legacy = original.raw_metadata.get("processing_schema") not in {"action-plan-v1", "action-plan-v2"}
             old_query = original.source_type == "telegram_query"
             text = original.raw_content
         if legacy:
@@ -46,3 +48,34 @@ def handle_message(session, update, user_id, settings):
     if result.get("action_plan") and result.get("interaction") != "query":
         maybe_index(session, UUID(saved["source_id"]), settings)
     return {"status": "answered", "source_id": saved["source_id"], "answer": answer}
+
+
+def respond_v2(session, result, settings):
+    from app.schemas.action_plan import ScopedQuery
+    groups, clarifications = {}, []
+    for item in result.get("execution", {}).get("items", []):
+        if item["status"] in {"applied", "completed", "already_applied"}:
+            pid = item.get("project_id")
+            prefix = {"tasks": "Nueva tarea: ", "completed_task": "Completada: ",
+                      "updates": "Hecho: ", "decisions": "Decision: "}[item["type"]]
+            groups.setdefault(pid, []).append(prefix + item["title"])
+            if item.get("reason") == "unresolved_project":
+                clarifications.append("Precisa el proyecto de «" + item["title"] + "».")
+        elif item["type"] == "completed_task" and item.get("reason") not in {"not_performed", "duplicate_in_plan"}:
+            choices = [item["title"], *(a["title"] for a in item.get("alternatives", []))]
+            clarifications.append("No complete «" + item["title"] + "». Confirma el pendiente: " + "; ".join(choices))
+    with session.begin():
+        labels = {}
+        for pid in groups:
+            project = session.get(Project, UUID(pid)) if pid else None
+            labels[pid] = project.name if project else "Sin proyecto identificado"
+    parts = [labels[pid] + "\n" + "\n".join(items) for pid, items in groups.items()]
+    parts.extend(dict.fromkeys(clarifications))
+    if result.get("query"):
+        query = ScopedQuery.model_validate(result["query"])
+        if query.ambiguities:
+            parts.append("Precisa el alcance de la consulta: " + "; ".join(a.message for a in query.ambiguities))
+        else:
+            parts.append(answer_reasoning(session, query.question, result["source_id"], settings,
+                                          interpreted_plan=query.retrieval, interpreter_version="message-interpreter-v2"))
+    return "\n\n".join(parts) or "Nota guardada."

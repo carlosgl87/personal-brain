@@ -32,13 +32,21 @@ def run_result(run, status="processed"):
         "summary": result["summary"], "tasks_count": len(result["tasks"]),
         "decisions_count": len(result["decisions"]),
     }
-    if result.get("schema_version") == "action-plan-v1":
+    if result.get("schema_version") in {"action-plan-v1", "action-plan-v2"}:
         response.update(updates_count=len(result.get("updates", [])),
                         action_plan=True, query=result.get("query"), interaction=result["interaction"],
                         project_id=result.get("execution", {}).get("project_id"),
                         completed_titles=result.get("execution", {}).get("completed_titles", []),
                         new_task_titles=[t["title"] for t in result["tasks"]],
                         ambiguities=result.get("execution", {}).get("ambiguities", []))
+    if result.get("schema_version") == "action-plan-v2":
+        response.update(schema_version="action-plan-v2", execution=result.get("execution", {}),
+                        ambiguities=result.get("ambiguities", []))
+        applied = result.get("execution", {}).get("items", [])
+        response["tasks_count"] = sum(i["type"] == "tasks" and i["status"] == "applied" for i in applied)
+        response["decisions_count"] = sum(i["type"] == "decisions" and i["status"] == "applied" for i in applied)
+        response["updates_count"] = sum(i["type"] == "updates" and i["status"] == "applied" for i in applied)
+        response["new_task_titles"] = [i["title"] for i in applied if i["type"] == "tasks" and i["status"] == "applied"]
     return response
 
 
@@ -96,16 +104,17 @@ def process_text_source(session: Session, source_id: UUID, settings, force=False
                 Project.status == "active", Project.archived_at.is_(None),
             ).options(selectinload(Project.aliases), selectinload(Project.area),
                       selectinload(Project.company))).all()
-            if action_plan or source.raw_metadata.get("processing_schema") == "action-plan-v1":
-                from app.services.action_context import assemble_context
-                from app.services.message_interpreter import interpret, PROMPT_VERSION as ACTION_PROMPT
+            if action_plan or source.raw_metadata.get("processing_schema") in {"action-plan-v1", "action-plan-v2"}:
+                from app.services.action_context import assemble_context, assemble_v2_context
+                from app.services.message_interpreter import interpret, PROMPT_VERSION as ACTION_PROMPT, PROMPT_VERSION_V2
                 from app.services.action_execution import execute_plan
                 try:
-                    context = assemble_context(session, source, projects, settings)
+                    v2 = action_plan or source.raw_metadata.get("processing_schema") == "action-plan-v2"
+                    context = (assemble_v2_context if v2 else assemble_context)(session, source, projects, settings)
                     plan = interpret(settings, context)
                 except ValueError:
                     raise ExtractionError("Contexto demasiado grande; fuente conservada.") from None
-                run = execute_plan(session, source, plan, context, settings, ACTION_PROMPT)
+                run = execute_plan(session, source, plan, context, settings, PROMPT_VERSION_V2 if v2 else ACTION_PROMPT)
                 for previous_project in sorted(affected - {source.primary_project_id}, key=str):
                     mark_dirty(session, previous_project, settings, origin_key="run:" + str(run.id),
                                source_id=source.id, event_type="source_revision")

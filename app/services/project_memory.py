@@ -64,12 +64,14 @@ def snapshot_data(session, project_id, settings, reconciliation=False):
         statement = source_statement(scope)
     rows = session.execute(statement.order_by(Source.received_at.desc(), Source.id)
         .limit(settings.project_memory_incremental_max_sources + 1)).all() if statement is not None else []
-    sources = [{"source_id": str(source.id), "source_type": source.source_type,
-                "received_at": source.received_at.isoformat(), "run_id": str(run.id) if run else None,
-                "summary": (run.result.get("summary", "") if run else "")[:6000],
-                "summary_truncated": bool(run and len(run.result.get("summary", "")) > 6000),
-                "excerpt": source.raw_content[:1500], "excerpt_truncated": len(source.raw_content) > 1500}
-               for source, run in rows[:settings.project_memory_incremental_max_sources]]
+    from app.services.project_source_view import project_source_view
+    sources = []
+    for source, run in rows[:settings.project_memory_incremental_max_sources]:
+        summary, excerpt = project_source_view(source, run, project_id)
+        sources.append({"source_id": str(source.id), "source_type": source.source_type,
+            "received_at": source.received_at.isoformat(), "run_id": str(run.id) if run else None,
+            "summary": summary[:6000], "summary_truncated": len(summary) > 6000,
+            "excerpt": excerpt[:1500], "excerpt_truncated": len(excerpt) > 1500})
     tasks = session.scalars(select(Task).outerjoin(Source, Source.id == Task.source_id).where(
         Task.project_id == project_id, current_derived(Task)).order_by(Task.updated_at.desc(), Task.id).limit(61)).all()
     task_data = [{"task_id": str(task.id), "source_id": str(task.source_id) if task.source_id else None,
@@ -112,9 +114,11 @@ def snapshot_data(session, project_id, settings, reconciliation=False):
     if reconciliation and source_ids:
         history = session.execute(source_statement(scope).where(Source.id.not_in(source_ids))
             .order_by(Source.received_at.desc(), Source.id).limit(settings.project_memory_incremental_max_sources)).all()
-        data["history_sources"] = [{"source_id": str(source.id), "received_at": source.received_at.isoformat(),
-            "summary": (run.result.get("summary", "") if run else "")[:3000], "excerpt": source.raw_content[:1000],
-            "truncated": len(source.raw_content) > 1000} for source, run in history]
+        data["history_sources"] = []
+        for source, run in history:
+            summary, excerpt = project_source_view(source, run, project_id)
+            data["history_sources"].append({"source_id": str(source.id), "received_at": source.received_at.isoformat(),
+                "summary": summary[:3000], "excerpt": excerpt[:1000], "truncated": len(excerpt) > 1000})
     if reconciliation and embedding_ready(settings):
         try:
             data["chunks"] = semantic_search(session, "objetivos avances riesgos bloqueos decisiones " + project.name,

@@ -129,7 +129,7 @@ def ingest_document(session, update, user_id, settings):
     with session.begin():
         kind, project, warning = document_scope(session, content, message.get("caption", ""), filename)
         source = session.scalar(insert(Source).values(
-            id=uuid4(), source_type=kind, raw_content=content, raw_metadata=update | {"processing_schema": "action-plan-v1"},
+            id=uuid4(), source_type=kind, raw_content=content, raw_metadata=update | {"processing_schema": "action-plan-v2"},
             primary_project_id=project.id if project else None, external_source="telegram",
             external_id=external_id, processing_status="pending",
         ).on_conflict_do_nothing(index_elements=["external_source", "external_id"],

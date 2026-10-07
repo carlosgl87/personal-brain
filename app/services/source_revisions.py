@@ -1,7 +1,7 @@
 """Preserve manual task changes and invalidate every affected project on an edit."""
 from sqlalchemy import select, or_, and_, BigInteger, cast
-from app.models import Source, Task, TaskChange
-from app.services.queries import chat_identity, message_identity, revision_time, current_source, current_derived
+from app.models import Source, Task, TaskChange, Decision, ProjectUpdate, ProcessingRun
+from app.services.queries import chat_identity, message_identity, revision_time, current_source, current_derived, source_project_membership
 
 
 def predecessor_statement(source, current_only=True):
@@ -35,13 +35,18 @@ def revision_projects(session, source):
         from app.services.processing import SourceNotProcessable
         raise SourceNotProcessable("La nota anterior tiene tareas editadas manualmente; conserva esos cambios y guarda la correccion como una nota nueva.")
     affected.update(row.project_id for row in tasks if row.project_id)
+    for row in previous:
+        run = session.get(ProcessingRun, row.latest_processing_run_id)
+        if run and run.result.get("schema_version") == "action-plan-v2":
+            from uuid import UUID
+            affected.update(UUID(pid) for pid in run.result.get("execution", {}).get("project_ids", []))
     return affected
 
 
 def revision_delta(session, event):
     source = session.get(Source, event.source_id)
     statement = predecessor_statement(source, current_only=False) if source else None
-    ids=session.scalars(statement.where(Source.primary_project_id == event.project_id).with_only_columns(Source.id)).all() if statement is not None else []
+    ids=session.scalars(statement.where(source_project_membership([event.project_id])).with_only_columns(Source.id)).all() if statement is not None else []
     return {"source_id":str(event.source_id), "project_id":str(event.project_id),
         "event_type":"source_revision", "superseded_source_ids":[str(identifier) for identifier in ids],
         "current_source_project_id":str(source.primary_project_id) if source and source.primary_project_id else None,

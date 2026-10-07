@@ -12,6 +12,9 @@ from app.services.claude import ExtractionError
 
 
 def execute_plan(session, source, plan, context, settings, prompt_version, provenance=None, metadata=None):
+    if plan.schema_version == "action-plan-v2":
+        from app.services.action_execution_v2 import execute_v2
+        return execute_v2(session, source, plan, context, settings, prompt_version, provenance, metadata)
     validate_plan(plan, source, context)
     project_id = plan.project_id if plan.scope_confidence >= .90 else None
     # An explicit document caption is authoritative, including unresolved captions.

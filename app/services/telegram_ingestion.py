@@ -54,7 +54,7 @@ def ingest_update(session: Session, update: dict, user_id: int, is_query=False, 
         if existing is not None:
             return source_result(session, existing, "duplicate")
         project = None if is_query or interpret else resolve_project(session, message["text"])
-        metadata = update | {"processing_schema": "action-plan-v1"} if interpret else update
+        metadata = update | {"processing_schema": "action-plan-v2"} if interpret else update
         if interpret and message["text"].strip().startswith("/"):
             name = message["text"].strip().split()[0].casefold().split("@")[0]
             metadata = metadata | {"command_mode": "nota" if name == "/nota" else "ask"}

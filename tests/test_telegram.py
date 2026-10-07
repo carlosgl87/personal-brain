@@ -265,7 +265,7 @@ class TelegramTests(unittest.TestCase):
         compiled = self.session.scalar.call_args_list[1].args[0].compile(dialect=postgresql.dialect())
         self.assertEqual(compiled.params['raw_content'], update()['message']['text'])
         self.assertEqual(compiled.params['raw_metadata']['message'], update()['message'])
-        self.assertEqual(compiled.params['raw_metadata']['processing_schema'], 'action-plan-v1')
+        self.assertEqual(compiled.params['raw_metadata']['processing_schema'], 'action-plan-v2')
 
     def test_phase2_migration_only_adds_partial_unique_index(self):
         from alembic import command

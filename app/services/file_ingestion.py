@@ -48,6 +48,6 @@ def ingest_file(session, filename, source_type="meeting_transcript", project_nam
             return existing.id
         source_id = uuid4()
         session.add(Source(id=source_id, source_type=source_type, raw_content=content,
-            raw_metadata=metadata | {"processing_schema": "action-plan-v1"}, primary_project_id=project_id, external_source="text-file-cli",
+            raw_metadata=metadata | {"processing_schema": "action-plan-v2"}, primary_project_id=project_id, external_source="text-file-cli",
             external_id=external_id, processing_status="pending", received_at=datetime.now(timezone.utc)))
         return source_id

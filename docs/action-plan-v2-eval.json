@@ -1,0 +1,509 @@
+{
+  "provider": "Claude real",
+  "data": "synthetic",
+  "database_writes": false,
+  "pass": 10,
+  "review": 0,
+  "cases": [
+    {
+      "case": "Dashboard Cobranzas",
+      "input": "Ya tuvimos la reunión con Cobranzas. Los datos cuadraron y las líneas recomendadas les hicieron sentido. Mañana tengo que mandar los accesos.",
+      "status": "PASS",
+      "plan": {
+        "schema_version": "action-plan-v2",
+        "primary_project_id": "00000000-0000-0000-0000-000000000001",
+        "interaction": "update",
+        "summary": "Reunión con Cobranzas completada exitosamente: datos cuadrados y líneas recomendadas validadas. Pendiente envío de accesos mañana.",
+        "tasks": [
+          {
+            "project_id": "00000000-0000-0000-0000-000000000001",
+            "scope_confidence": 0.95,
+            "ambiguities": [],
+            "title": "Mandar los accesos",
+            "description": "Envío de accesos tras validación exitosa en reunión con Cobranzas",
+            "owner_text": null,
+            "due_at": "2026-10-08T23:59:59-05:00",
+            "evidence": "Mañana tengo que mandar los accesos."
+          }
+        ],
+        "decisions": [],
+        "updates": [
+          {
+            "project_id": "00000000-0000-0000-0000-000000000001",
+            "scope_confidence": 0.98,
+            "ambiguities": [],
+            "update_text": "Reunión con Cobranzas realizada",
+            "event_at": null,
+            "evidence": "Ya tuvimos la reunión con Cobranzas."
+          },
+          {
+            "project_id": "00000000-0000-0000-0000-000000000001",
+            "scope_confidence": 0.98,
+            "ambiguities": [],
+            "update_text": "Los datos cuadraron correctamente",
+            "event_at": null,
+            "evidence": "Los datos cuadraron"
+          },
+          {
+            "project_id": "00000000-0000-0000-0000-000000000001",
+            "scope_confidence": 0.98,
+            "ambiguities": [],
+            "update_text": "Las líneas recomendadas fueron validadas positivamente por el equipo de Cobranzas",
+            "event_at": null,
+            "evidence": "las líneas recomendadas les hicieron sentido"
+          }
+        ],
+        "completed_tasks": [],
+        "query": null,
+        "people": [
+          "Cobranzas"
+        ],
+        "dates": [
+          "mañana"
+        ],
+        "follow_ups": [
+          "Enviar accesos mañana"
+        ],
+        "tags": [
+          "reunión",
+          "validación",
+          "accesos"
+        ],
+        "ambiguities": []
+      }
+    },
+    {
+      "case": "Catu",
+      "input": "Para Catu quiero cambiar la validación. Si el ID no parece un número debe pedir DNI y nombre para saber si es vendedor o supervisor. Esto hay que implementarlo.",
+      "status": "PASS",
+      "plan": {
+        "schema_version": "action-plan-v2",
+        "primary_project_id": "00000000-0000-0000-0000-000000000002",
+        "interaction": "update",
+        "summary": "Cambio en validación de Catu: cuando el ID no parece número, pedir DNI y nombre para identificar si es vendedor o supervisor. Tarea de implementación creada.",
+        "tasks": [
+          {
+            "project_id": "00000000-0000-0000-0000-000000000002",
+            "scope_confidence": 0.98,
+            "ambiguities": [],
+            "title": "Implementar validación de ID con fallback DNI/nombre",
+            "description": "Si el ID no parece un número, solicitar DNI y nombre para determinar si el usuario es vendedor o supervisor.",
+            "owner_text": null,
+            "due_at": null,
+            "evidence": "Para Catu quiero cambiar la validación. Si el ID no parece un número debe pedir DNI y nombre para saber si es vendedor o supervisor. Esto hay que implementarlo."
+          }
+        ],
+        "decisions": [],
+        "updates": [],
+        "completed_tasks": [],
+        "query": null,
+        "people": [],
+        "dates": [],
+        "follow_ups": [
+          "Definir lógica exacta para identificar si ID 'no parece número'",
+          "Especificar formato de respuesta para DNI/nombre",
+          "Validar flujo con usuarios reales"
+        ],
+        "tags": [
+          "validación",
+          "autenticación",
+          "UX"
+        ],
+        "ambiguities": []
+      }
+    },
+    {
+      "case": "McKinsey completion",
+      "input": "Operating Model / McKinsey: ya envié los correos de validación a los responsables de IT.",
+      "status": "PASS",
+      "plan": {
+        "schema_version": "action-plan-v2",
+        "primary_project_id": "00000000-0000-0000-0000-000000000003",
+        "interaction": "update",
+        "summary": "Confirmación de envío de correos de validación a responsables de IT para Operating Model / McKinsey",
+        "tasks": [],
+        "decisions": [],
+        "updates": [
+          {
+            "project_id": "00000000-0000-0000-0000-000000000003",
+            "scope_confidence": 1.0,
+            "ambiguities": [],
+            "update_text": "Se enviaron correos de validación a los responsables de IT",
+            "event_at": null,
+            "evidence": "ya envié los correos de validación a los responsables de IT"
+          }
+        ],
+        "completed_tasks": [
+          {
+            "project_id": "00000000-0000-0000-0000-000000000003",
+            "scope_confidence": 1.0,
+            "ambiguities": [],
+            "task_id": "00000000-0000-0000-0000-000000000067",
+            "confidence": 0.98,
+            "evidence": "ya envié los correos de validación a los responsables de IT",
+            "state": "performed",
+            "alternatives": []
+          }
+        ],
+        "query": null,
+        "people": [
+          "responsables de IT"
+        ],
+        "dates": [],
+        "follow_ups": [],
+        "tags": [
+          "validación",
+          "IT",
+          "correos"
+        ],
+        "ambiguities": []
+      }
+    },
+    {
+      "case": "Dos completions",
+      "input": "Operating Model / McKinsey: ya envié los correos y terminé la presentación.",
+      "status": "PASS",
+      "plan": {
+        "schema_version": "action-plan-v2",
+        "primary_project_id": "00000000-0000-0000-0000-000000000003",
+        "interaction": "update",
+        "summary": "Completadas dos tareas del proyecto Operating Model / McKinsey: envío de correos de validación a IT y finalización de la presentación.",
+        "tasks": [],
+        "decisions": [],
+        "updates": [
+          {
+            "project_id": "00000000-0000-0000-0000-000000000003",
+            "scope_confidence": 1.0,
+            "ambiguities": [],
+            "update_text": "Enviados correos de validación a IT",
+            "event_at": null,
+            "evidence": "ya envié los correos"
+          },
+          {
+            "project_id": "00000000-0000-0000-0000-000000000003",
+            "scope_confidence": 1.0,
+            "ambiguities": [],
+            "update_text": "Presentación finalizada",
+            "event_at": null,
+            "evidence": "terminé la presentación"
+          }
+        ],
+        "completed_tasks": [
+          {
+            "project_id": "00000000-0000-0000-0000-000000000003",
+            "scope_confidence": 1.0,
+            "ambiguities": [],
+            "task_id": "00000000-0000-0000-0000-000000000067",
+            "confidence": 0.98,
+            "evidence": "ya envié los correos",
+            "state": "performed",
+            "alternatives": []
+          },
+          {
+            "project_id": "00000000-0000-0000-0000-000000000003",
+            "scope_confidence": 1.0,
+            "ambiguities": [],
+            "task_id": "00000000-0000-0000-0000-000000000068",
+            "confidence": 0.98,
+            "evidence": "terminé la presentación",
+            "state": "performed",
+            "alternatives": []
+          }
+        ],
+        "query": null,
+        "people": [],
+        "dates": [],
+        "follow_ups": [],
+        "tags": [
+          "correos",
+          "presentación",
+          "IT",
+          "validación"
+        ],
+        "ambiguities": []
+      }
+    },
+    {
+      "case": "Futuro",
+      "input": "Mañana enviaré los correos.",
+      "status": "PASS",
+      "plan": {
+        "schema_version": "action-plan-v2",
+        "primary_project_id": "00000000-0000-0000-0000-000000000003",
+        "interaction": "update",
+        "summary": "Compromiso de envío de correos de validación para mañana",
+        "tasks": [],
+        "decisions": [],
+        "updates": [
+          {
+            "project_id": "00000000-0000-0000-0000-000000000003",
+            "scope_confidence": 0.85,
+            "ambiguities": [],
+            "update_text": "Compromiso de enviar los correos mañana",
+            "event_at": null,
+            "evidence": "Mañana enviaré los correos."
+          }
+        ],
+        "completed_tasks": [],
+        "query": null,
+        "people": [],
+        "dates": [
+          "mañana"
+        ],
+        "follow_ups": [
+          "Verificar envío de correos de validación a IT"
+        ],
+        "tags": [
+          "correos",
+          "validación"
+        ],
+        "ambiguities": []
+      }
+    },
+    {
+      "case": "Negación",
+      "input": "No pude enviar los correos.",
+      "status": "PASS",
+      "plan": {
+        "schema_version": "action-plan-v2",
+        "primary_project_id": "00000000-0000-0000-0000-000000000003",
+        "interaction": "update",
+        "summary": "No se pudieron enviar los correos de validación a IT en el proyecto Operating Model / McKinsey.",
+        "tasks": [],
+        "decisions": [],
+        "updates": [
+          {
+            "project_id": "00000000-0000-0000-0000-000000000003",
+            "scope_confidence": 1.0,
+            "ambiguities": [],
+            "update_text": "No se pudieron enviar los correos de validación a IT",
+            "event_at": null,
+            "evidence": "No pude enviar los correos."
+          }
+        ],
+        "completed_tasks": [],
+        "query": null,
+        "people": [],
+        "dates": [],
+        "follow_ups": [
+          "Verificar razón por la cual no se pudieron enviar los correos",
+          "Intentar nuevamente el envío de correos a IT"
+        ],
+        "tags": [
+          "blocker",
+          "comunicación"
+        ],
+        "ambiguities": []
+      }
+    },
+    {
+      "case": "Decision",
+      "input": "Evaluamos ambas opciones y decidimos usar Databricks.",
+      "status": "PASS",
+      "plan": {
+        "schema_version": "action-plan-v2",
+        "primary_project_id": "00000000-0000-0000-0000-000000000003",
+        "interaction": "update",
+        "summary": "Se decidió usar Databricks tras evaluar ambas opciones en el proyecto Operating Model / McKinsey.",
+        "tasks": [],
+        "decisions": [
+          {
+            "project_id": "00000000-0000-0000-0000-000000000003",
+            "scope_confidence": 0.98,
+            "ambiguities": [],
+            "decision_text": "Usar Databricks",
+            "decided_at": "2026-10-07T10:00:00-05:00",
+            "evidence": "decidimos usar Databricks"
+          }
+        ],
+        "updates": [
+          {
+            "project_id": "00000000-0000-0000-0000-000000000003",
+            "scope_confidence": 0.98,
+            "ambiguities": [],
+            "update_text": "Se evaluaron ambas opciones para la plataforma de datos",
+            "event_at": "2026-10-07T10:00:00-05:00",
+            "evidence": "Evaluamos ambas opciones"
+          }
+        ],
+        "completed_tasks": [],
+        "query": null,
+        "people": [],
+        "dates": [
+          "2026-10-07"
+        ],
+        "follow_ups": [],
+        "tags": [
+          "databricks",
+          "decisión técnica",
+          "plataforma"
+        ],
+        "ambiguities": []
+      }
+    },
+    {
+      "case": "Proposal",
+      "input": "Tal vez deberíamos usar Databricks.",
+      "status": "PASS",
+      "plan": {
+        "schema_version": "action-plan-v2",
+        "primary_project_id": "00000000-0000-0000-0000-000000000003",
+        "interaction": "update",
+        "summary": "Propuesta de considerar Databricks como alternativa tecnológica para el proyecto Operating Model / McKinsey.",
+        "tasks": [],
+        "decisions": [],
+        "updates": [
+          {
+            "project_id": "00000000-0000-0000-0000-000000000003",
+            "scope_confidence": 0.85,
+            "ambiguities": [],
+            "update_text": "Propuesta de evaluar Databricks como opción tecnológica",
+            "event_at": null,
+            "evidence": "Tal vez deberíamos usar Databricks."
+          }
+        ],
+        "completed_tasks": [],
+        "query": null,
+        "people": [],
+        "dates": [],
+        "follow_ups": [
+          "Evaluar viabilidad técnica de Databricks",
+          "Comparar alternativas tecnológicas"
+        ],
+        "tags": [
+          "databricks",
+          "propuesta",
+          "tecnología"
+        ],
+        "ambiguities": []
+      }
+    },
+    {
+      "case": "Mixed",
+      "input": "Ya envié los correos de IT. ¿Qué me queda pendiente de Operating Model / McKinsey?",
+      "status": "PASS",
+      "plan": {
+        "schema_version": "action-plan-v2",
+        "primary_project_id": "00000000-0000-0000-0000-000000000003",
+        "interaction": "mixed",
+        "summary": "Usuario completó envío de correos de IT en Operating Model/McKinsey y consulta pendientes del mismo proyecto",
+        "tasks": [],
+        "decisions": [],
+        "updates": [
+          {
+            "project_id": "00000000-0000-0000-0000-000000000003",
+            "scope_confidence": 0.98,
+            "ambiguities": [],
+            "update_text": "Correos de validación a IT fueron enviados",
+            "event_at": null,
+            "evidence": "Ya envié los correos de IT"
+          }
+        ],
+        "completed_tasks": [
+          {
+            "project_id": "00000000-0000-0000-0000-000000000003",
+            "scope_confidence": 0.98,
+            "ambiguities": [],
+            "task_id": "00000000-0000-0000-0000-000000000067",
+            "confidence": 0.97,
+            "evidence": "Ya envié los correos de IT",
+            "state": "performed",
+            "alternatives": []
+          }
+        ],
+        "query": {
+          "question": "¿Qué tareas quedan pendientes en el proyecto Operating Model / McKinsey?",
+          "retrieval": {
+            "semantic_queries": [
+              "tareas pendientes Operating Model McKinsey",
+              "open tasks proyecto McKinsey"
+            ],
+            "scope_type": "project",
+            "scope_value": "Operating Model / McKinsey",
+            "include_project_memory": true,
+            "time_basis": "none",
+            "include_tasks": true,
+            "include_decisions": false,
+            "include_updates": false,
+            "include_recent_sources": false,
+            "include_completed_tasks": false,
+            "retrieval_depth": "focused",
+            "recent_sources_limit": null,
+            "date_from": null,
+            "date_to": null
+          },
+          "ambiguities": []
+        },
+        "people": [],
+        "dates": [],
+        "follow_ups": [
+          "Terminar presentación de Operating Model/McKinsey"
+        ],
+        "tags": [
+          "IT",
+          "correos",
+          "validación"
+        ],
+        "ambiguities": []
+      }
+    },
+    {
+      "case": "Multi-project",
+      "input": "En Dashboard Cobranzas ya enviamos los accesos. Para Catu quiero incorporar la línea de crédito disponible dentro del agente.",
+      "status": "PASS",
+      "plan": {
+        "schema_version": "action-plan-v2",
+        "primary_project_id": "00000000-0000-0000-0000-000000000001",
+        "interaction": "update",
+        "summary": "Completada tarea de envío de accesos en Dashboard Cobranzas. Nueva funcionalidad pendiente para incorporar línea de crédito disponible en Catu - Agente Vendedores.",
+        "tasks": [
+          {
+            "project_id": "00000000-0000-0000-0000-000000000002",
+            "scope_confidence": 1.0,
+            "ambiguities": [],
+            "title": "Incorporar línea de crédito disponible dentro del agente",
+            "description": "Funcionalidad para mostrar/integrar la línea de crédito disponible en el agente de vendedores.",
+            "owner_text": null,
+            "due_at": null,
+            "evidence": "Para Catu quiero incorporar la línea de crédito disponible dentro del agente."
+          }
+        ],
+        "decisions": [],
+        "updates": [
+          {
+            "project_id": "00000000-0000-0000-0000-000000000001",
+            "scope_confidence": 1.0,
+            "ambiguities": [],
+            "update_text": "Se enviaron los accesos",
+            "event_at": null,
+            "evidence": "En Dashboard Cobranzas ya enviamos los accesos."
+          }
+        ],
+        "completed_tasks": [
+          {
+            "project_id": "00000000-0000-0000-0000-000000000001",
+            "scope_confidence": 1.0,
+            "ambiguities": [],
+            "task_id": "00000000-0000-0000-0000-000000000065",
+            "confidence": 1.0,
+            "evidence": "En Dashboard Cobranzas ya enviamos los accesos.",
+            "state": "performed",
+            "alternatives": []
+          }
+        ],
+        "query": null,
+        "people": [],
+        "dates": [],
+        "follow_ups": [
+          "Validar integración de línea de crédito en Catu"
+        ],
+        "tags": [
+          "accesos",
+          "línea de crédito",
+          "agente"
+        ],
+        "ambiguities": []
+      }
+    }
+  ]
+}

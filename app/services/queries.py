@@ -3,7 +3,7 @@ import re
 from dataclasses import dataclass
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import BigInteger, and_, cast, exists, func, or_, select
+from sqlalchemy import false, BigInteger, and_, cast, exists, func, or_, select
 from sqlalchemy.orm import aliased, selectinload
 
 from app.models import Area, Company, Decision, ProcessingRun, Project, Source, Task
@@ -175,7 +175,7 @@ def current_source():
     return and_(
         ~exists(select(ProcessingRun.id).where(
             ProcessingRun.id == Source.latest_processing_run_id,
-            ProcessingRun.result["schema_version"].astext == "action-plan-v1",
+            ProcessingRun.result["schema_version"].astext.in_(["action-plan-v1", "action-plan-v2"]),
             ProcessingRun.result["interaction"].astext == "query").correlate(Source)),
         Source.latest_transcript_source_id.is_(None),
         or_(Source.parent_source_id.is_(None), current_transcript),
@@ -209,7 +209,7 @@ def decision_statement(scope):
 def source_statement(scope):
     statement = select(Source, ProcessingRun).outerjoin(ProcessingRun, ProcessingRun.id == Source.latest_processing_run_id)
     statement = statement.where(Source.source_type != "telegram_query", current_source())
-    return scoped(statement, Source.primary_project_id, scope)
+    return statement if scope.project_ids is None else statement.where(source_project_membership(scope.project_ids))
 
 
 def brief(value, size=500):
@@ -308,3 +308,14 @@ def answer_chunks(answer, limit=3500):
     if buffer:
         chunks.append("".join(buffer))
     return chunks or ["No hay resultados."]
+
+
+def source_project_membership(project_ids):
+    """Membership records actual applied scopes; query scope never creates membership."""
+    if not project_ids:
+        return false()
+    run = aliased(ProcessingRun, name="membership_run")
+    return or_(Source.primary_project_id.in_(project_ids), exists(select(run.id).where(
+        run.id == Source.latest_processing_run_id, run.result["schema_version"].astext == "action-plan-v2",
+        or_(*(run.result["execution"]["project_ids"].contains([str(pid)]) for pid in project_ids)))
+        .correlate(Source)))

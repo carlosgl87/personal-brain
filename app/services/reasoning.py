@@ -220,7 +220,7 @@ def trace_context(context):
     return result
 
 
-def answer_reasoning(session, question, question_source_id, settings, interpreted_plan=None):
+def answer_reasoning(session, question, question_source_id, settings, interpreted_plan=None, interpreter_version="message-interpreter-v1"):
     if not question.strip():
         return "Usa /ask seguido de una pregunta."
     if len(question) > 3000:
@@ -247,7 +247,7 @@ def answer_reasoning(session, question, question_source_id, settings, interprete
                 if context.get("retrieval", {}).get("budget_reduced"):
                     answer += "\n\nCobertura parcial: la evidencia se redujo por el presupuesto de contexto."
             session.add(ReasoningRun(id=uuid4(), question_source_id=source.id, provider="anthropic",
-                model=model, planner_version="message-interpreter-v1" if interpreted_plan is not None else PLANNER_VERSION, plan=plan.model_dump(mode="json"),
+                model=model, planner_version=interpreter_version if interpreted_plan is not None else PLANNER_VERSION, plan=plan.model_dump(mode="json"),
                 retrieved_context=trace_context(context), answer=answer))
             return answer
     except MemoryError as exc:

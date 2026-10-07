@@ -46,3 +46,25 @@ class ConsolidatedActionPlan(ActionPlan):
     tasks: list[ConsolidatedTask]
     decisions: list[ConsolidatedDecision]
     updates: list[ConsolidatedUpdate] = Field(default_factory=list)
+
+
+from app.schemas.action_plan import ActionPlanV2, ScopedTask, ScopedDecision, ScopedUpdate
+
+
+class ConsolidatedScopedTask(ScopedTask):
+    candidate_ids: list[str] = Field(min_length=1, max_length=100)
+
+
+class ConsolidatedScopedDecision(ScopedDecision):
+    candidate_ids: list[str] = Field(min_length=1, max_length=100)
+
+
+class ConsolidatedScopedUpdate(ScopedUpdate):
+    candidate_ids: list[str] = Field(min_length=1, max_length=100)
+
+
+class ConsolidatedActionPlanV2(ActionPlanV2):
+    dispositions: list[CandidateDisposition] = Field(max_length=1000)
+    tasks: list[ConsolidatedScopedTask]
+    decisions: list[ConsolidatedScopedDecision]
+    updates: list[ConsolidatedScopedUpdate] = Field(default_factory=list)

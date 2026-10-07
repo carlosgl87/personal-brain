@@ -133,7 +133,8 @@ def semantic_statement(vector, settings, project_ids=None, source_type=None, dat
         ChunkEmbedding.dimensions == settings.openrouter_embedding_dimensions, Source.source_type.in_(TEXT_SOURCE_TYPES), current_source(),
     )
     if project_ids is not None:
-        statement = statement.where(Source.primary_project_id.in_(project_ids))
+        from app.services.queries import source_project_membership
+        statement = statement.where(source_project_membership(project_ids))
     if source_type:
         statement = statement.where(Source.source_type == source_type)
     if date_from:

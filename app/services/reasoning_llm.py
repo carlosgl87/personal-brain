@@ -64,7 +64,7 @@ def provider_schema(value):
     return value
 
 
-def call_json(settings, system, data, schema, client=None, *, max_tokens=4096):
+def call_json(settings, system, data, schema, client=None, *, max_tokens=4096, constrained=True):
     key, model = settings.llm_credentials()
     for name in ("httpx", "httpcore"):
         logging.getLogger(name).setLevel(logging.CRITICAL)
@@ -72,6 +72,11 @@ def call_json(settings, system, data, schema, client=None, *, max_tokens=4096):
     payload = {"model": model, "max_tokens": max_tokens, "system": system,
                "messages": [{"role": "user", "content": json.dumps(data, ensure_ascii=False)}],
                "output_config": {"format": {"type": "json_schema", "schema": provider_schema(schema.model_json_schema())}}}
+    if not constrained:
+        # Large multi-project schemas exceed Anthropic compiled-grammar limits.
+        # The exact same local Pydantic schema still validates every response.
+        payload.pop("output_config")
+        payload["system"] += "\nDevuelve exclusivamente JSON válido, sin markdown, conforme a este schema: " + json.dumps(provider_schema(schema.model_json_schema()), ensure_ascii=False)
     def request(http):
         try:
             response = http.post("https://api.anthropic.com/v1/messages", json=payload,
@@ -81,6 +86,10 @@ def call_json(settings, system, data, schema, client=None, *, max_tokens=4096):
             if body.get("stop_reason") != "end_turn":
                 raise ValueError
             text = "".join(block["text"] for block in body["content"] if block.get("type") == "text")
+            if not constrained:
+                text = text.strip()
+                if text.startswith("```json\n") and text.endswith("\n```"):
+                    text = text[len("```json\n"):-len("\n```")]
             return schema.model_validate_json(text)
         except Exception:
             raise ReasoningError("Claude no devolvió un resultado válido. La pregunta se conserva; puedes reintentar.") from None

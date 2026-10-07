@@ -343,7 +343,9 @@ class ActionPlanTests(unittest.TestCase):
         session.rows.append(old)
         session.source.latest_processing_run_id = old.id
         original_result = copy.deepcopy(old.result)
-        proposal = plan(session.projects[0].id, updates=[{'update_text': 'Datos validados.', 'evidence': session.source.raw_content}])
+        from app.schemas.action_plan import ActionPlanV2
+        session.source.primary_project_id = session.projects[0].id
+        proposal = ActionPlanV2(schema_version='action-plan-v2', interaction='update', summary='Datos validados.', updates=[{'project_id': session.projects[0].id, 'scope_confidence': .99, 'update_text': 'Datos validados.', 'evidence': session.source.raw_content}])
         with patch('app.services.message_interpreter.interpret', return_value=proposal), patch('app.services.processing.extract') as legacy:
             response = process_text_source(session, session.source.id, config(), force=True, action_plan=True)
         self.assertTrue(response['action_plan'])

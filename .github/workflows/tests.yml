@@ -1,0 +1,46 @@
+name: Disposable PostgreSQL tests
+on:
+  pull_request:
+  push:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: test-only-password
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      DATABASE_URL: postgresql+psycopg://postgres:test-only-password@127.0.0.1:5432/personal_brain_test_integration
+      PERSONAL_BRAIN_TEST_DATABASE_URL: postgresql+psycopg://postgres:test-only-password@127.0.0.1:5432/personal_brain_test_integration
+      PERSONAL_BRAIN_MIGRATION_TEST_DATABASE_URL: postgresql+psycopg://postgres:test-only-password@127.0.0.1:5432/personal_brain_test_migration
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          cache: pip
+      - run: python -m pip install -r requirements.txt
+      - name: Create two isolated disposable databases
+        run: |
+          python - <<'PY'
+          import psycopg
+          with psycopg.connect(host="127.0.0.1", port=5432, user="postgres", password="test-only-password", dbname="postgres", autocommit=True) as conn:
+              conn.execute("CREATE DATABASE personal_brain_test_integration")
+              conn.execute("CREATE DATABASE personal_brain_test_migration")
+          PY
+      - run: python -m alembic upgrade head
+      - run: python -B -m unittest discover -s tests -v
+      - run: python -m pip check
+      - run: git diff --check
+      - run: python -m alembic upgrade head --sql > /tmp/alembic.sql

@@ -213,7 +213,7 @@ class MemoryTests(unittest.TestCase):
             self.assertEqual(source.id, source_id)
             self.assertIsNone(source.primary_project_id)
             self.assertEqual(source.raw_content, "original")
-            self.assertEqual(source.raw_metadata, metadata | {"processing_schema": "action-plan-v1"})
+            self.assertEqual(source.raw_metadata, metadata | {"processing_schema": "action-plan-v2"})
             session.reset_mock()
             session.scalar.return_value = SimpleNamespace(id=source_id)
             self.assertEqual(ingest_file(session, "ignored.txt"), source_id)

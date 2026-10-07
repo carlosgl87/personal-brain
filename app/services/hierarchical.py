@@ -77,10 +77,11 @@ def process_hierarchical(session, source_id, settings, force=False, refresh_part
             if refresh_parts and not force:
                 raise SourceNotProcessable("--refresh-parts requiere --reprocess.")
             snapshot = source_snapshot(source)
-            if action_plan or source.raw_metadata.get("processing_schema") == "action-plan-v1":
-                part_prompt = "action-plan-part-v1"
+            if action_plan or source.raw_metadata.get("processing_schema") in {"action-plan-v1", "action-plan-v2"}:
+                v2 = action_plan or source.raw_metadata.get("processing_schema") == "action-plan-v2"
+                part_prompt = "action-plan-part-v2" if v2 else "action-plan-part-v1"
                 # Runtime snapshot only: never rewrite original Source metadata.
-                snapshot.raw_metadata = snapshot.raw_metadata | {"processing_schema": "action-plan-v1"}
+                snapshot.raw_metadata = snapshot.raw_metadata | {"processing_schema": "action-plan-v2" if v2 else "action-plan-v1"}
             version = ensure_source_chunks(session, source, settings)
             chunks = session.scalars(select(SourceChunk).where(SourceChunk.source_id == source_id,
                 SourceChunk.chunk_version == version).order_by(SourceChunk.chunk_index)).all()
@@ -152,15 +153,15 @@ def process_hierarchical(session, source_id, settings, force=False, refresh_part
             projects = session.scalars(select(Project).where(
                 Project.status == "active", Project.archived_at.is_(None)).options(
                     selectinload(Project.aliases), selectinload(Project.area), selectinload(Project.company))).all()
-            if action_plan or source.raw_metadata.get("processing_schema") == "action-plan-v1":
-                from app.services.action_context import assemble_context
+            if action_plan or source.raw_metadata.get("processing_schema") in {"action-plan-v1", "action-plan-v2"}:
+                from app.services.action_context import assemble_context, assemble_v2_context
                 from app.services.action_execution import execute_plan
-                context = assemble_context(session, source, projects, settings, include_message=False)
+                context = (assemble_v2_context if v2 else assemble_context)(session, source, projects, settings, include_message=False)
                 result, provenance = consolidate(settings, snapshot, parts, projects, context=context)
                 run = execute_plan(session, source, result, context, settings,
-                    "action-plan-consolidation-v1", provenance=provenance, metadata={
+                    "action-plan-consolidation-v2" if v2 else "action-plan-consolidation-v1", provenance=provenance, metadata={
                         "extraction_mode": "hierarchical", "chunk_version": version,
-                        "partial_prompt_version": "action-plan-part-v1", "part_ids": [str(p.id) for p in parts],
+                        "partial_prompt_version": part_prompt, "part_ids": [str(p.id) for p in parts],
                         "generation_id": str(generation_id) if generation_id else None,
                         "candidate_dispositions": provenance["dispositions"]})
                 for affected_id in sorted(affected - {source.primary_project_id}, key=str):
