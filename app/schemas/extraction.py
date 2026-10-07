@@ -1,5 +1,5 @@
 from uuid import UUID
-from pydantic import AwareDatetime, BaseModel, ConfigDict, field_validator
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, field_validator
 
 
 class StrictModel(BaseModel):
@@ -7,10 +7,10 @@ class StrictModel(BaseModel):
 
 
 class ExtractedTask(StrictModel):
-    title: str
-    description: str | None
-    owner_text: str | None
-    due_at: AwareDatetime | None
+    title: str = Field(description="Una unidad de trabajo con estado independiente; no agrupar acciones separables ni dividir objetos de una misma acción.")
+    description: str | None = Field(description="Contexto y condiciones/dependencias explícitas de esta acción; sin inventar pasos adicionales.")
+    owner_text: str | None = Field(description="Responsable explícito de esta acción; no copiar responsables de otras acciones. null si no consta.")
+    due_at: AwareDatetime | None = Field(description="Fecha límite de esta acción, con zona horaria; compartirla solo si el plazo abarca explícitamente todas las acciones. null si no consta.")
     evidence: str
 
     @field_validator("title")
