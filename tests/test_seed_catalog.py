@@ -32,7 +32,7 @@ class SeedCatalogTests(unittest.TestCase):
                 'Plataforma Generacion Contenidos'],
             'GCP Migration & Landing Zone': ['GCP Migration', 'Landing Zone', 'GCP Landing Zone',
                 'Migracion Google', 'Google Migracion', 'Google Migration', 'Migracion GCP'],
-            'Operating Model / McKinsey': ['Operating Model', 'McKinsey', 'Modelo Operativo',
+            'Operating Model / McKinsey': ['Operating Model', 'Modelo Operativo',
                                            'Modelo Operativo McKinsey'],
             'Catu - Agente Vendedores': ['Catu', 'Agente Vendedores', 'Agente de Vendedores',
                 'Agente Catusita', 'Catusita Agente Vendedores', 'Catusita Agente de Vendedores'],
@@ -42,6 +42,7 @@ class SeedCatalogTests(unittest.TestCase):
         for name, aliases in expected.items():
             with self.subTest(project=name):
                 self.assertTrue(set(aliases).issubset(self.projects[name]['aliases']))
+        self.assertNotIn('McKinsey', self.projects['Operating Model / McKinsey']['aliases'])
 
     def test_administrative_projects_have_explicit_scope_and_no_generic_aliases(self):
         for area in ['Laureate', 'Consultora']:
