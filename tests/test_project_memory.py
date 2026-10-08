@@ -298,7 +298,7 @@ class ProjectMemoryTests(unittest.TestCase):
         session = MagicMock()
         session.scalars.return_value.all.return_value = []
         task = SimpleNamespace(id=uuid4(), source_id=uuid4(), processing_run_id=None,
-            title='Current SQL task', description=None, owner_text='Ana', status='open', due_at=None, completed_at=None)
+            project_id=uuid4(), title='Current SQL task', description=None, owner_text='Ana', status='open', due_at=None, completed_at=None)
         session.execute.side_effect = [SimpleNamespace(all=lambda: []), SimpleNamespace(all=lambda: [(task, 'SIMA')]),
             SimpleNamespace(all=lambda: []), SimpleNamespace(all=lambda: []), SimpleNamespace(all=lambda: [])]
         result = retrieve(session, QueryPlan(), settings())

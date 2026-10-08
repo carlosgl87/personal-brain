@@ -5,6 +5,11 @@ from app.schemas.extraction import StrictModel
 
 
 class QueryPlan(StrictModel):
+    data_authority: Literal["structured", "contextual"] = Field(default="contextual",
+        description="structured: exact operational entities only; contextual: history/exploration with SQL precedence.")
+    presentation: Literal["list", "analysis"] = Field(default="analysis",
+        description="list: render exact rows without synthesis; analysis: interpret/prioritize the retrieved evidence.")
+    catalog_entity: Literal["projects", "companies", "areas"] | None = None
     semantic_queries: list[str] = Field(default_factory=list, max_length=3)
     scope_type: Literal["project", "company", "area", "global"] | None = None
     scope_value: str | None = Field(default=None, max_length=250)
@@ -39,5 +44,6 @@ class QueryPlan(StrictModel):
 
 
 class SynthesizedAnswer(StrictModel):
+    shown_task_ids: list[UUID] = Field(default_factory=list, max_length=1000)
     text: str = Field(min_length=1, max_length=10000)
     source_ids: list[UUID] = Field(max_length=40)

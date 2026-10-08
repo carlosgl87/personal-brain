@@ -47,15 +47,18 @@ def assemble_v2_context(session, source, projects, settings, include_message=Tru
     from uuid import UUID
     recent = session.scalars(select(ProjectUpdate).join(Source, Source.id == ProjectUpdate.source_id)
         .where(current_derived(ProjectUpdate)).order_by(ProjectUpdate.created_at.desc()).limit(10)).all()
+    from app.services.conversation_context import recent_task_response
+    previous_response = recent_task_response(session, source)
+    previous_project_ids = [t["project_id"] for t in (previous_response or {}).get("tasks", []) if t.get("project_id")]
     catalog, truncated = candidate_projects(projects, source.raw_content,
-        recent_ids=[u.project_id for u in recent], pinned_id=source.primary_project_id,
+        recent_ids=[u.project_id for u in recent] + previous_project_ids, pinned_id=source.primary_project_id,
         max_chars=min(20000, settings.reasoning_context_max_chars // 3))
     message = source.raw_metadata.get("message") or source.raw_metadata.get("edited_message") or {}
     context = {"schema_version": "action-plan-v2", "message": source.raw_content if include_message else None,
         "filename": source.raw_metadata.get("filename") or message.get("document", {}).get("file_name"),
         "original_date_unix": message.get("date"), "received_at": source.received_at.isoformat(),
         "timezone": "America/Lima", "projects": catalog, "candidate_projects": [],
-        "catalog_truncated": truncated, "command_mode": source.raw_metadata.get("command_mode"),
+        "catalog_truncated": truncated, "recent_task_response": previous_response, "command_mode": source.raw_metadata.get("command_mode"),
         "document_scope": {"project_id": str(source.primary_project_id) if source.primary_project_id else None,
                            "caption": message.get("caption")} if message.get("document") else None,
         "recent_updates": [{"project_id": str(u.project_id), "text": u.update_text[:1000],
@@ -68,9 +71,15 @@ def assemble_v2_context(session, source, projects, settings, include_message=Tru
             "open_tasks": [{"id": str(t.id), "project_id": str(t.project_id), "title": t.title,
                 "description": (t.description or "")[:1000], "owner": t.owner_text,
                 "due_at": t.due_at.isoformat() if t.due_at else None} for t in tasks[:100]]})
+    if previous_response:
+        current_ids = {t["id"] for group in context["candidate_projects"] for t in group["open_tasks"]}
+        for shown in previous_response["tasks"]:
+            shown["currently_open_candidate"] = shown["task_id"] in current_ids
     # Remove supplementary updates first, then task rows with explicit per-project incompleteness.
     if len(json.dumps(context, ensure_ascii=False)) > settings.reasoning_context_max_chars:
         context["recent_updates"] = []
+    if len(json.dumps(context, ensure_ascii=False)) > settings.reasoning_context_max_chars and previous_response:
+        context["recent_task_response"] = None
     while len(json.dumps(context, ensure_ascii=False)) > settings.reasoning_context_max_chars:
         groups = [g for g in context["candidate_projects"] if g["open_tasks"]]
         if not groups:

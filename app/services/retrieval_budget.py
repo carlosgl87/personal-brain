@@ -50,7 +50,7 @@ def context_size(context):
 
 
 def bound_context(context, plan, limits, max_chars):
-    keys = ("tasks", "decisions", "updates", "chunks", "recent_sources", "projects", "project_memories", "new_sources")
+    keys = ("tasks", "decisions", "updates", "chunks", "recent_sources", "projects", "project_memories", "new_sources", "task_states")
     original = {key: list(context.get(key, [])) for key in keys}
     result = {key: value for key, value in context.items() if key not in keys}
     result["warnings"] = list(context["warnings"])
@@ -61,7 +61,8 @@ def bound_context(context, plan, limits, max_chars):
     result["retrieval"] = info
     # Reserve space for counts, coverage warnings and final length metadata.
     reserve = 1200
-    ordered = [("new_sources", item) for item in original["new_sources"]]
+    ordered = [("task_states", item) for item in original["task_states"]]
+    ordered += [("new_sources", item) for item in original["new_sources"]]
     ordered += [("project_memories", item) for item in original["project_memories"]]
     for index in range(max(len(original[k]) for k in ("tasks", "decisions", "updates"))):
         for key in ("tasks", "decisions", "updates"):
@@ -81,6 +82,10 @@ def bound_context(context, plan, limits, max_chars):
             info["budget_reduced"] = True
         else:
             accepted.append(key)
+    if len(result["task_states"]) < len(original["task_states"]):
+        result["sql_state_coverage"] = {"complete": False}
+    if len(result["chunks"]) < len(original["chunks"]) and result.get("semantic_coverage", {}).get("requested"):
+        result["semantic_coverage"] = result["semantic_coverage"] | {"material": True, "status": "budget_limited"}
     if info["budget_reduced"]:
         result["warnings"].append("Cobertura parcial: el presupuesto de contexto redujo la evidencia recuperada.")
     info["counts"] = {key: len(result[key]) for key in keys}
@@ -92,6 +97,10 @@ def bound_context(context, plan, limits, max_chars):
         info["budget_reduced"] = True
         info["counts"] = {key: len(result[key]) for key in keys}
         info["context_chars"] = context_size(result)
+    if len(result["task_states"]) < len(original["task_states"]):
+        result["sql_state_coverage"] = {"complete": False}
+    if len(result["chunks"]) < len(original["chunks"]) and result.get("semantic_coverage", {}).get("requested"):
+        result["semantic_coverage"] = result["semantic_coverage"] | {"material": True, "status": "budget_limited"}
     if context_size(result) > max_chars:
         raise ValueError("Context metadata exceeds the configured budget.")
     return result

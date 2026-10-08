@@ -590,3 +590,51 @@ class DatabaseIntegrationTests(unittest.TestCase):
             self.assertEqual(session.scalar(select(func.count(ProjectUpdate.id)).where(ProjectUpdate.source_id == note)), 0)
             self.assertEqual(session.scalar(select(func.count(ProcessingRun.id)).where(ProcessingRun.source_id == note)), 0)
             self.assertIsNone(session.get(Source, note).latest_processing_run_id)
+
+
+    def test_exact_sql_query_excludes_completed_and_history_and_preserves_rows(self):
+        from app.schemas.reasoning import QueryPlan
+        from app.services.reasoning import answer_reasoning
+        original=self.save_source(self.a, 'La Task B estaba pendiente: enviar el correo histórico.')
+        question=self.save_source(content='Dame todos mis pendientes.', source_type='telegram_query')
+        a,b=uuid4(),uuid4()
+        with Session(self.engine) as session,session.begin():
+            session.add_all([Task(id=a,source_id=original,project_id=self.a,title='Task A abierta',status='open'),
+                Task(id=b,source_id=original,project_id=self.a,title='Task B completada',status='completed',completed_at=self.now)])
+            name=session.get(Project,self.a).name
+        plan=QueryPlan(data_authority='structured',presentation='list',scope_type='project',scope_value=name,
+            include_tasks=True,include_decisions=False,semantic_queries=['el correo histórico'],time_basis='none')
+        with Session(self.engine) as session,patch('app.services.reasoning.synthesize') as synth,patch('app.services.reasoning.semantic_search') as semantic:
+            answer=answer_reasoning(session,'Dame todos mis pendientes.',question,self.cfg,interpreted_plan=plan)
+        synth.assert_not_called();semantic.assert_not_called()
+        self.assertIn('Task A abierta',answer);self.assertNotIn('Task B',answer);self.assertNotIn('histórico',answer)
+        from app.models import ReasoningRun
+        with Session(self.engine) as session:
+            run=session.scalar(select(ReasoningRun).where(ReasoningRun.question_source_id==question))
+            self.assertEqual(run.retrieved_context['coverage']['tasks']['total'],1)
+            self.assertEqual(run.retrieved_context['shown_tasks'][0]['task_id'],str(a))
+            self.assertEqual(session.get(Task,b).status,'completed')
+            self.assertEqual(session.get(Source,original).raw_content,'La Task B estaba pendiente: enviar el correo histórico.')
+
+    def test_previous_task_response_is_scoped_and_expired_context_is_ignored(self):
+        from app.models import ReasoningRun
+        from app.services.conversation_context import recent_task_response
+        chat=self.a.int % 1000000000
+        metadata={'message':{'chat':{'id':chat,'type':'private'},'from':{'id':123}}}
+        old=self.save_source(content='Old query',source_type='telegram_query',metadata=metadata)
+        current=self.save_source(content='Ya hice esa.',source_type='telegram_text',metadata=metadata)
+        unrelated=self.save_source(content='Other chat',source_type='telegram_query',metadata={'message':{'chat':{'id':chat+1,'type':'private'},'from':{'id':123}}})
+        tid=uuid4()
+        payload={'shown_tasks':[{'task_id':str(tid),'title':'Correo','project_id':str(self.a),'project_name':'Fixture','status':'open','ordinal':1,'project_ordinal':1}]}
+        with Session(self.engine) as session,session.begin():
+            source=session.get(Source,current)
+            stamp=source.received_at
+            session.add_all([ReasoningRun(question_source_id=old,provider='test',model='test',planner_version='fixture',plan={},retrieved_context=payload,answer='Correo',created_at=stamp-timedelta(minutes=1)),
+                ReasoningRun(question_source_id=unrelated,provider='test',model='test',planner_version='fixture',plan={},retrieved_context={'shown_tasks':[{'task_id':str(uuid4()),'title':'Other'}]},answer='Other',created_at=stamp-timedelta(seconds=1))])
+        with Session(self.engine) as session:
+            source=session.get(Source,current)
+            previous=recent_task_response(session,source)
+            self.assertEqual(previous['tasks'][0]['task_id'],str(tid))
+            # A detached synthetic clock exercises expiry without updating any Source.
+            synthetic=type('SourceClock',(),{'id':source.id,'raw_metadata':source.raw_metadata,'received_at':source.received_at+timedelta(hours=7)})()
+            self.assertIsNone(recent_task_response(session,synthetic))

@@ -38,10 +38,12 @@ def retrieve_project_memories(session, scope, settings, limit=30):
                 source_rows = session.execute(source_statement(Scope([state.project_id], name)).where(Source.id.in_(ids))
                     .order_by(Source.received_at.desc()).limit(15)).all()
                 for source, run in source_rows:
+                    from app.services.project_source_view import project_source_view
+                    summary, excerpt = project_source_view(source, run, state.project_id)
                     deltas.append({"source_id": str(source.id), "project_id": str(state.project_id),
                         "received_at": source.received_at.isoformat(), "run_id": str(run.id) if run else None,
-                        "summary": (run.result.get("summary", "") if run else "")[:3000],
-                        "excerpt": source.raw_content[:2000], "truncated": len(source.raw_content) > 2000})
+                        "summary": summary[:3000],
+                        "excerpt": excerpt[:2000], "truncated": len(excerpt) > 2000})
             for event in events:
                 if event.event_type == "source_revision":
                     deltas.append(revision_delta(session,event))

@@ -88,10 +88,15 @@ def retrieve(session, plan, settings):
     scope = plan_scope(session, plan)
     if scope.error:
         raise MemoryError(scope.error)
+    if plan.data_authority == "structured":
+        from app.services.structured_queries import retrieve_structured
+        return retrieve_structured(session, plan, settings, scope)
     limits = effective_limits(plan)
     global_broad = scope.project_ids is None and plan.retrieval_depth == "broad"
     context = {"scope": scope.label, "tasks": [], "decisions": [], "updates": [], "recent_sources": [],
-               "chunks": [], "warnings": [], "projects": [], "project_memories": [], "new_sources": []}
+               "chunks": [], "warnings": [], "projects": [], "project_memories": [], "new_sources": [],
+               "data_authority": "contextual", "task_states": [],
+               "semantic_coverage": {"requested": bool(plan.semantic_queries), "material": False, "status": "not_requested"}}
     context["temporal_window"] = {"time_basis": plan.time_basis,
         "date_from": plan.date_from.isoformat() if plan.date_from else None,
         "date_to": plan.date_to.isoformat() if plan.date_to else None}
@@ -116,7 +121,8 @@ def retrieve(session, plan, settings):
         for task, name in rows[:limits["tasks"]]:
             context["tasks"].append({"task_id": str(task.id), "source_id": str(task.source_id) if task.source_id else None,
                 "run_id": str(task.processing_run_id) if task.processing_run_id else None,
-                "title": task.title, "description": clipped(task.description, 500), "owner": task.owner_text,
+                "title": task.title, "project_id": str(task.project_id) if task.project_id else None,
+                "description": clipped(task.description, 500), "owner": task.owner_text,
                 "status": task.status, "due_at": task.due_at.isoformat() if task.due_at else None,
                 "project": name, "completed_at": task.completed_at.isoformat() if task.completed_at else None})
         if len(rows) > limits["tasks"]:
@@ -155,8 +161,14 @@ def retrieve(session, plan, settings):
             context["warnings"].append("Las notas recientes están limitadas por el plan.")
     if plan.semantic_queries:
         if not embedding_ready(settings):
-            context["warnings"].append("Búsqueda semántica no disponible: configura embeddings y ejecuta backfill.")
+            context["semantic_coverage"].update(status="unavailable", material=True)
+            context["warnings"].append("La exploración de notas por significado no estuvo disponible; la respuesta puede omitir temas.")
         else:
+            from app.services.semantic_coverage import semantic_index_incomplete
+            context["semantic_coverage"]["status"] = "available"
+            if semantic_index_incomplete(session, scope, settings, plan):
+                context["semantic_coverage"].update(status="index_incomplete", material=True)
+                context["warnings"].append("Hay notas del alcance sin indexación para el modelo activo; la exploración puede omitirlas.")
             found = {}
             try:
                 for question in plan.semantic_queries:
@@ -172,21 +184,35 @@ def retrieve(session, plan, settings):
                 context["chunks"] = (diverse_chunks(ranked, limits["chunks"]) if global_broad
                                      else ranked[:limits["chunks"]])
                 if len(ranked) > limits["chunks"] or len(context["chunks"]) == limits["chunks"]:
+                    context["semantic_coverage"].update(status="limited", material=True)
                     context["warnings"].append("Los chunks son una seleccion limitada de candidatos relevantes.")
                 if global_broad:
                     context["warnings"].append("Diversidad por proyecto aplicada; limitada a proyectos con chunks indexados relevantes.")
                 if not context["chunks"]:
-                    context["warnings"].append("No se encontraron chunks indexados para el alcance y modelo activos.")
-            except EmbeddingError:
+                    if not context["semantic_coverage"]["material"]:
+                        context["semantic_coverage"]["status"] = "no_results"
+                    context["warnings"].append("No se encontraron fragmentos en la búsqueda por significado; no prueba ausencia de temas.")
+            except (EmbeddingError, MemoryError):
+                context["semantic_coverage"].update(status="failed", material=True)
                 context["warnings"].append("Falló la búsqueda semántica; la respuesta usa únicamente evidencia estructurada y reciente.")
+    if plan.include_tasks or context["project_memories"] or context["recent_sources"] or context["chunks"] or context["new_sources"]:
+        states = session.scalars(scoped(select(Task).outerjoin(Source, Source.id == Task.source_id)
+            .where(current_derived(Task)), Task.project_id, scope).order_by(Task.updated_at.desc(), Task.id).limit(1001)).all()
+        context["task_states"] = [{"task_id": str(t.id), "title": t.title, "status": t.status,
+            "completed_at": t.completed_at.isoformat() if t.completed_at else None,
+            "project_id": str(t.project_id) if t.project_id else None,
+            "source_id": str(t.source_id) if t.source_id else None} for t in states[:1000]]
+        context["sql_state_coverage"] = {"complete": len(states) <= 1000}
+        if len(states) > 1000:
+            context["warnings"].append("Estado SQL limitado; no afirmar que un compromiso no está registrado.")
     context["warnings"].append("Recuperación acotada; no implica cobertura completa de toda la historia.")
     return bound_context(context, plan, limits, settings.reasoning_context_max_chars)
 
 
 
 def trace_context(context):
-    result = {key: value for key, value in context.items() if key not in {"chunks", "recent_sources", "tasks", "decisions", "updates", "project_memories", "new_sources"}}
-    for kind in ("tasks", "decisions", "updates"):
+    result = {key: value for key, value in context.items() if key not in {"chunks", "recent_sources", "tasks", "decisions", "updates", "project_memories", "new_sources", "task_states"}}
+    for kind in ("tasks", "decisions", "updates", "task_states"):
         result[kind] = []
         for item in context.get(kind, []):
             trace = {key: value for key, value in item.items() if key not in {"title", "description", "text", "original_excerpt"}}
@@ -238,17 +264,29 @@ def answer_reasoning(session, question, question_source_id, settings, interprete
             now = datetime.now(timezone.utc)
             plan = interpreted_plan or plan_question(question, catalog_context(session), now, settings)
             context = retrieve(session, plan, settings)
-            if not any(context.get(k) for k in ("tasks", "decisions", "updates", "recent_sources", "chunks", "project_memories", "new_sources")):
-                answer = "No encontré evidencia suficiente en el alcance consultado. Puede haber fuentes todavía sin indexar."
+            shown_tasks = []
+            if plan.data_authority == "structured" and plan.presentation == "list":
+                from app.services.structured_queries import render_structured, display_tasks
+                answer = render_structured(context)
+                shown_tasks = display_tasks(context["tasks"])
+            elif not any(context.get(k) for k in ("tasks", "decisions", "catalog", "updates", "recent_sources", "chunks", "project_memories", "new_sources")):
+                if plan.data_authority == "structured":
+                    from app.services.structured_queries import render_structured
+                    answer = render_structured(context)
+                else:
+                    answer = "No encontré evidencia suficiente en el alcance consultado."
             else:
-                answer = synthesize(question, context, settings)
-                if any("semántica" in warning or "embeddings" in warning or "indexados" in warning for warning in context["warnings"]):
-                    answer += "\n\nCobertura semántica incompleta; revisa configuración e indexación."
+                answer = synthesize(question, context, settings, shown_tasks=shown_tasks)
                 if context.get("retrieval", {}).get("budget_reduced"):
                     answer += "\n\nCobertura parcial: la evidencia se redujo por el presupuesto de contexto."
+            semantic = context.get("semantic_coverage", {})
+            if semantic.get("requested") and semantic.get("material"):
+                answer += "\n\nLa exploración por significado tiene cobertura limitada; la respuesta puede omitir temas."
+            trace = trace_context(context)
+            trace["shown_tasks"] = shown_tasks
             session.add(ReasoningRun(id=uuid4(), question_source_id=source.id, provider="anthropic",
                 model=model, planner_version=interpreter_version if interpreted_plan is not None else PLANNER_VERSION, plan=plan.model_dump(mode="json"),
-                retrieved_context=trace_context(context), answer=answer))
+                retrieved_context=trace, answer=answer))
             return answer
     except MemoryError as exc:
         return str(exc)

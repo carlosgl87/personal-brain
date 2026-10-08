@@ -52,6 +52,7 @@ def handle_message(session, update, user_id, settings):
 
 def respond_v2(session, result, settings):
     from app.schemas.action_plan import ScopedQuery
+    from app.services.message_interpreter import PROMPT_VERSION_V2
     groups, clarifications = {}, []
     for item in result.get("execution", {}).get("items", []):
         if item["status"] in {"applied", "completed", "already_applied"}:
@@ -77,5 +78,5 @@ def respond_v2(session, result, settings):
             parts.append("Precisa el alcance de la consulta: " + "; ".join(a.message for a in query.ambiguities))
         else:
             parts.append(answer_reasoning(session, query.question, result["source_id"], settings,
-                                          interpreted_plan=query.retrieval, interpreter_version="message-interpreter-v2"))
+                                          interpreted_plan=query.retrieval, interpreter_version=PROMPT_VERSION_V2))
     return "\n\n".join(parts) or "Nota guardada."

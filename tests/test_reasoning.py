@@ -195,7 +195,7 @@ class ReasoningTests(unittest.TestCase):
         run = session.add.call_args.args[0]
         self.assertIsInstance(run, ReasoningRun)
         self.assertEqual(run.question_source_id, source_id)
-        self.assertEqual(run.planner_version, "memory-planner-v3-project-memory")
+        self.assertEqual(run.planner_version, "memory-planner-v4-sql-authority")
 
     def test_failed_claude_keeps_question_and_does_not_save_a_successful_run(self):
         session = MagicMock()
